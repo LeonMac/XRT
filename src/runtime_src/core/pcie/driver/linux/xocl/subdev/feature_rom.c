@@ -517,7 +517,7 @@ static int get_header_from_iomem(struct feature_rom *rom)
 	if (val != MAGIC_NUM) {
 		vendor = XOCL_PL_TO_PCI_DEV(pdev)->vendor;
 		did = XOCL_PL_TO_PCI_DEV(pdev)->device;
-		if (vendor == 0x1d0f && (did == 0x1042 || did == 0xf010)) { // MAGIC, we should define elsewhere
+		if (vendor == 0x1d0f && (did == 0x1042 || did == 0xf010 || || did == 0xf000)) { // MAGIC, we should define elsewhere
 			xocl_info(&pdev->dev,
 				"Found AWS VU9P Device without featureROM");
 			/*

@@ -668,7 +668,7 @@ int AwsDev::loadDefaultAfiIfCleared( void )
             std::cout << "ERROR: Sleep until load failed." << std::endl;
             return -1;
         }
-        fpga_pci_rescan_slot_app_pfs( mBoardNumber );
+        //fpga_pci_rescan_slot_app_pfs( mBoardNumber );
     }
     return 0;
 }
