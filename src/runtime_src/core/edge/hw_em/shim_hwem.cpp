@@ -21,7 +21,6 @@
 #include <iostream>
 #include <boost/property_tree/xml_parser.hpp>
 #include "shim.h"
-#include "shim-profile.h"
 #include <cstring>
 #include <errno.h>
 #include <sys/ioctl.h>
@@ -155,7 +154,8 @@ bool validateXclBin(const xclBin *header , std::string &xclBinName)
 }
 }
 
-int ZYNQShim::xclLoadXclBin(const xclBin *header) {
+int shim::xclLoadXclBin(const xclBin *header)
+{
   int ret = 0;
  /*if (mLogStream.is_open()) {
     mLogStream << __func__ << ", " << std::this_thread::get_id() << std::endl;
@@ -220,7 +220,7 @@ int ZYNQShim::xclLoadXclBin(const xclBin *header) {
   return ret;
 }
 
-ZYNQShim::~ZYNQShim() {
+shim::~shim() {
   //Tell the Pllauncher to close
   if (ZYNQ_HW_EM::isRemotePortMapped) {
     PLLAUNCHER::OclCommand *cmd = new PLLAUNCHER::OclCommand();

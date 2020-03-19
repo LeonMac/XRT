@@ -22,6 +22,7 @@
 
 #define XCLMGMT_RESET_MAX_RETRY		10
 
+static void xclmgmt_reset_pci(struct xclmgmt_dev *lro);
 /**
  * @returns: NULL if AER apability is not found walking up to the root port
  *         : pci_dev ptr to the port which is AER capable.
@@ -157,12 +158,58 @@ void platform_axilite_flush(struct xclmgmt_dev *lro)
 	}
 }
 
+static int xocl_match_slot_and_wait(struct device *dev, void *data)
+{
+	struct xclmgmt_dev *lro = data;
+	struct pci_dev *pdev;
+	int ret = 0;
+
+	pdev = to_pci_dev(dev);
+
+	if (pdev != lro->core.pdev &&
+		(XOCL_DEV_ID(pdev) >> 3) == (XOCL_DEV_ID(lro->pci_dev) >> 3))
+		ret = xocl_wait_pci_status(pdev, PCI_COMMAND_MASTER, 0, 60);
+
+	return ret;
+}
+
+static int xocl_wait_master_off(struct xclmgmt_dev *lro)
+{
+	return bus_for_each_dev(&pci_bus_type, NULL, lro, xocl_match_slot_and_wait);
+}
+
+static int xocl_match_slot_set_master(struct device *dev, void *data)
+{
+	struct xclmgmt_dev *lro = data;
+	struct pci_dev *pdev;
+	u16 pci_cmd;
+	int ret = 0;
+
+	pdev = to_pci_dev(dev);
+
+	if (pdev != lro->core.pdev &&
+		(XOCL_DEV_ID(pdev) >> 3) == (XOCL_DEV_ID(lro->pci_dev) >> 3)) {
+		pci_read_config_word(pdev, PCI_COMMAND, &pci_cmd);
+		if (!(pci_cmd & PCI_COMMAND_MASTER)) {
+			pci_cmd |= PCI_COMMAND_MASTER;
+			pci_write_config_word(pdev, PCI_COMMAND, pci_cmd);
+		}
+	}
+
+	return ret;
+}
+
+static int xocl_set_master_on(struct xclmgmt_dev *lro)
+{
+	return bus_for_each_dev(&pci_bus_type, NULL, lro, xocl_match_slot_set_master);
+}
+
 /**
  * Perform a PCIe secondary bus reset. Note: Use this method over pcie fundamental reset.
  * This method is known to work better.
  */
 
-long xclmgmt_hot_reset(struct xclmgmt_dev *lro)
+long xclmgmt_hot_reset(struct xclmgmt_dev *lro, bool force)
 {
 	long err = 0;
 	const char *ep_name;
@@ -182,6 +229,13 @@ long xclmgmt_hot_reset(struct xclmgmt_dev *lro)
 		lro->instance, ep_name,
 		PCI_SLOT(pdev->devfn), PCI_FUNC(pdev->devfn));
 
+	if (!force) {
+		mgmt_info(lro, "wait for master off for all functions");
+		err = xocl_wait_master_off(lro);
+		if (err)
+			goto done;
+	}
+
 	xocl_thread_stop(lro);
 
 	/* request XMC/ERT to stop */
@@ -190,20 +244,21 @@ long xclmgmt_hot_reset(struct xclmgmt_dev *lro)
 	/* If the PCIe board has PS */
 	xocl_ps_sys_reset(lro);
 
-	xocl_icap_reset_axi_gate(lro);
-
 	/*
 	 * lock pci config space access from userspace,
 	 * save state and issue PCIe secondary bus reset
 	 */
 	if (!XOCL_DSA_PCI_RESET_OFF(lro)) {
+		xocl_subdev_destroy_by_level(lro, XOCL_SUBDEV_LEVEL_URP);
 		(void) xocl_subdev_offline_by_id(lro, XOCL_SUBDEV_ICAP);
 		(void) xocl_subdev_offline_by_id(lro, XOCL_SUBDEV_MAILBOX);
+		(void) xocl_subdev_offline_by_id(lro, XOCL_SUBDEV_AF);
 #if defined(__PPC64__)
 		pci_fundamental_reset(lro);
 #else
 		xclmgmt_reset_pci(lro);
 #endif
+		(void) xocl_subdev_online_by_id(lro, XOCL_SUBDEV_AF);
 		(void) xocl_subdev_online_by_id(lro, XOCL_SUBDEV_MAILBOX);
 		(void) xocl_subdev_online_by_id(lro, XOCL_SUBDEV_ICAP);
 	} else {
@@ -230,9 +285,6 @@ long xclmgmt_hot_reset(struct xclmgmt_dev *lro)
 		return -EIO;
 	}
 
-	/* Also freeze and free AXI gate to reset the OCL region. */
-	xocl_icap_reset_axi_gate(lro);
-
 	/* Workaround for some DSAs. Flush axilite busses */
 	if (dev_info->flags & XOCL_DSAFLAG_AXILITE_FLUSH)
 		platform_axilite_flush(lro);
@@ -240,10 +292,12 @@ long xclmgmt_hot_reset(struct xclmgmt_dev *lro)
 	/* restart XMC/ERT */
 	xocl_mb_reset(lro);
 
+	lro->reset_requested = false;
 	xocl_thread_start(lro);
 
 	/* If the PCIe board has PS. This could take 50 seconds */
 	xocl_ps_wait(lro);
+	xocl_set_master_on(lro);
 
 done:
 	return err;
@@ -342,9 +396,6 @@ int pci_fundamental_reset(struct xclmgmt_dev *lro)
 	u8 hot;
 	struct pci_dev *pci_dev = lro->pci_dev;
 
-	/* freeze and free AXI gate to reset the OCL region before and after the pcie reset. */
-	xocl_icap_reset_axi_gate(lro);
-
 	/*
 	 * lock pci config space access from userspace,
 	 * save state and issue PCIe fundamental reset
@@ -395,24 +446,22 @@ done:
 	rc = pcie_unmask_surprise_down(pci_dev, orig_mask);
 
 	xocl_pci_restore_config_all(lro);
-	/* Also freeze and free AXI gate to reset the OCL region. */
-	xocl_icap_reset_axi_gate(lro);
 
 	return rc;
 }
 
-void xclmgmt_reset_pci(struct xclmgmt_dev *lro)
+static void xclmgmt_reset_pci(struct xclmgmt_dev *lro)
 {
 	struct pci_dev *pdev = lro->pci_dev;
 	struct pci_bus *bus;
-	int i;
-	u16 pci_cmd;
 	u8 pci_bctl;
 
 	mgmt_info(lro, "Reset PCI");
 
 	/* what if user PF in VM ? */
 	xocl_pci_save_config_all(lro);
+
+	pci_disable_device(pdev);
 
 	/* Reset secondary bus. */
 	bus = pdev->bus;
@@ -425,14 +474,9 @@ void xclmgmt_reset_pci(struct xclmgmt_dev *lro)
 	pci_write_config_byte(bus->self, PCI_BRIDGE_CONTROL, pci_bctl);
 	ssleep(1);
 
-	for (i = 0; i < 5000; i++) {
-		pci_read_config_word(pdev, PCI_COMMAND, &pci_cmd);
-		if (pci_cmd != 0xffff)
-			break;
-		msleep(1);
-	}
+	pci_enable_device(pdev);
 
-	mgmt_info(lro, "Resetting for %d ms", i);
+	xocl_wait_pci_status(pdev, 0, 0, 0);
 
 	xocl_pci_restore_config_all(lro);
 
@@ -518,7 +562,7 @@ int xclmgmt_program_shell(struct xclmgmt_dev *lro)
 		ret = -EINVAL;
 		goto failed;
 	}
-	len = fdt_totalsize(lro->bld_blob);
+	len = fdt_totalsize(lro->core.blp_blob);
 	if (len > 100 * 1024 * 1024) {
 		mgmt_err(lro, "dtb is too big");
 		ret = -EINVAL;
@@ -530,7 +574,7 @@ int xclmgmt_program_shell(struct xclmgmt_dev *lro)
 		lro->core.fdt_blob = blob;
 		goto failed;
 	}
-	memcpy(lro->core.fdt_blob, lro->bld_blob, len);
+	memcpy(lro->core.fdt_blob, lro->core.blp_blob, len);
 	ret = xocl_icap_download_rp(lro, XOCL_SUBDEV_LEVEL_PRP,
 			RP_DOWNLOAD_DRY);
 	if (ret) {
@@ -546,8 +590,6 @@ int xclmgmt_program_shell(struct xclmgmt_dev *lro)
 	xocl_drvinst_set_offline(lro, true);
 
 	xocl_thread_stop(lro);
-
-	xocl_mb_stop(lro);
 
 	ret = xocl_subdev_destroy_prp(lro);
 	if (ret) {
@@ -568,6 +610,7 @@ int xclmgmt_program_shell(struct xclmgmt_dev *lro)
 		goto failed;
 	}
 
+	/* reload possible cmc and ert images */
 	xocl_icap_post_download_rp(lro);
 
 	xocl_thread_start(lro);
@@ -598,6 +641,7 @@ int xclmgmt_load_fdt(struct xclmgmt_dev *lro)
 	const struct firmware			*fw = NULL;
 	const struct axlf_section_header	*dtc_header;
 	struct axlf				*bin_axlf;
+	char					*vbnv;
 	char					fw_name[256];
 	int					ret;
 
@@ -627,6 +671,18 @@ int xclmgmt_load_fdt(struct xclmgmt_dev *lro)
 		goto failed;
 	}
 
+	vbnv = bin_axlf->m_header.m_platformVBNV;
+	if (strlen(vbnv) > 0) {
+		mgmt_info(lro, "Board VBNV: %s", vbnv);
+		ret = xocl_fdt_add_pair(lro, lro->core.fdt_blob, "vbnv", vbnv,
+				strlen(vbnv) + 1);
+		if (ret) {
+			mgmt_err(lro, "Adding VBNV pair failed, %d", ret);
+			goto failed;
+		}
+	}
+
+
 	release_firmware(fw);
 	fw = NULL;
 
@@ -636,12 +692,12 @@ int xclmgmt_load_fdt(struct xclmgmt_dev *lro)
 		goto failed;
 	}
 
-	lro->bld_blob = vmalloc(fdt_totalsize(lro->core.fdt_blob));
-	if (!lro->bld_blob) {
+	lro->core.blp_blob = vmalloc(fdt_totalsize(lro->core.fdt_blob));
+	if (!lro->core.blp_blob) {
 		ret = -ENOMEM;
 		goto failed;
 	}
-	memcpy(lro->bld_blob, lro->core.fdt_blob,
+	memcpy(lro->core.blp_blob, lro->core.fdt_blob,
 			fdt_totalsize(lro->core.fdt_blob));
 
 	xclmgmt_connect_notify(lro, false);

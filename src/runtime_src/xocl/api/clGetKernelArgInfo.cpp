@@ -24,6 +24,7 @@
 #include "detail/kernel.h"
 
 #include "plugin/xdp/profile.h"
+#include "plugin/xdp/lop.h"
 
 #include <CL/opencl.h>
 
@@ -85,6 +86,9 @@ clGetKernelArgInfo(cl_kernel          kernel ,
     case CL_KERNEL_ARG_NAME:
       buffer.as<char>() = arg->get_name();
       break;
+    case CL_KERNEL_ARG_OFFSET:
+      buffer.as<size_t>() = arg->get_offset();
+      break;
     default:
       throw error(CL_INVALID_VALUE,"clGetKernelArgInfo: invalid param_name");
       break;
@@ -105,6 +109,7 @@ clGetKernelArgInfo(cl_kernel        kernel ,
 {
   try {
     PROFILE_LOG_FUNCTION_CALL;
+    LOP_LOG_FUNCTION_CALL;
     return xocl::
       clGetKernelArgInfo
       (kernel,arg_indx,param_name,param_value_size,param_value,param_value_size_ret);

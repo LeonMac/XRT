@@ -1,5 +1,5 @@
 /*
- * Partial Copyright (C) 2019 Xilinx, Inc
+ * Partial Copyright (C) 2019-2020 Xilinx, Inc
  *
  * Microsoft provides sample code how RESTful APIs are being called 
  *
@@ -37,6 +37,7 @@
 #include <fstream>
 #include <exception>
 #include <regex>
+#include <future>
 #include "xclbin.h"
 #include "azure.h"
 
@@ -56,6 +57,11 @@ void fini(void *mpc_cookie);
  */
 static std::string RESTIP_ENDPOINT = "168.63.129.16";
 /*
+ * Maintain the serialNumber of cards.
+ * This is required since during reset, the sysfs entry is not available 
+ */
+static std::vector<std::string> FPGA_SERIAL_NUMBER;
+/*
  * Init function of the plugin that is used to hook the required functions.
  * The cookie is used by fini (see below). Can be NULL if not required.
  */
@@ -73,12 +79,12 @@ int init(mpd_plugin_callbacks *cbs)
         if (!private_ip.empty())
             RESTIP_ENDPOINT = private_ip;
         syslog(LOG_INFO, "azure restserver ip: %s\n", RESTIP_ENDPOINT.c_str());
+        FPGA_SERIAL_NUMBER = AzureDev::get_serial_number();
         // hook functions
         cbs->mpc_cookie = NULL;
         cbs->get_remote_msd_fd = get_remote_msd_fd;
         cbs->mb_req.load_xclbin = azureLoadXclBin;
         cbs->mb_req.hot_reset = azureHotReset;
-        cbs->plugin_cap = (1 << CAP_RESET_NEED_HELP);
         ret = 0;
     }
     syslog(LOG_INFO, "azure mpd plugin init called: %d\n", ret);
@@ -131,6 +137,17 @@ int azureLoadXclBin(size_t index, const axlf *xclbin, int *resp)
 }
 
 /*
+ * Reset requires the mailbox msg return before the real reset
+ * happens. So we run user special reset in async thread.
+ */
+std::future<void> nouse; //so far we don't care the return value of reset
+static void azureHotResetAsync(size_t index)
+{
+    AzureDev d(index);
+    d.azureHotReset();
+}
+
+/*
  * callback function that is used to handle MAILBOX_REQ_HOT_RESET msg
  *
  * Input:
@@ -143,8 +160,10 @@ int azureLoadXclBin(size_t index, const axlf *xclbin, int *resp)
  */
 int azureHotReset(size_t index, int *resp)
 {
-    AzureDev d(index);
-    *resp = d.azureHotReset();
+    //tell xocl don't try to restore anything since we are going
+    //to do hotplug in wireserver
+    *resp = -ESHUTDOWN;
+    nouse = std::async(std::launch::async, &azureHotResetAsync, index);
     return 0;
 }
 
@@ -178,7 +197,7 @@ int AzureDev::azureLoadXclBin(const xclBin *buffer)
     if (memcmp(xclbininmemory, "xclbin2", 8) != 0)
            return -1;
     std::string fpgaSerialNumber;
-       get_fpga_serialNo(fpgaSerialNumber);
+    get_fpga_serialNo(fpgaSerialNumber);
     std::cout << "FPGA serial No: " << fpgaSerialNumber << std::endl;
     int index = 0;
     std::string imageSHA;
@@ -232,10 +251,11 @@ int AzureDev::azureLoadXclBin(const xclBin *buffer)
             fpgaSerialNumber
         );
         if (splitLine(ret, key, value, delim) != 0 ||
-            key.compare("GetReimagingStatus") != 0)
-            return -EFAULT;
-
-        if (value.compare("3") != 0) {
+            key.compare("GetReimagingStatus") != 0) {
+            std::cout << "Retrying GetReimagingStatus ... " << std::endl;
+            sleep(1);
+            continue;
+        } else if (value.compare("3") != 0) {
             sleep(1);
             wait++;
             continue;
@@ -301,7 +321,7 @@ AzureDev::~AzureDev()
 {
 }
 
-AzureDev::AzureDev(size_t index)
+AzureDev::AzureDev(size_t index) : index(index)
 {
     dev = pcidev::get_dev(index, true);
 }
@@ -320,6 +340,8 @@ int AzureDev::UploadToWireServer(
     CURL *curl;
     CURLcode res;
     struct write_unit unit;
+    int retryCounter = 0;
+    long responseCode = 0;
 
     unit.uptr = data.c_str();
     unit.sizeleft = data.size();
@@ -358,12 +380,45 @@ int AzureDev::UploadToWireServer(
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 
         //curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
-        res = curl_easy_perform(curl);
-
-        if (res != CURLE_OK) {
-            std::cerr << "curl_easy_perform() failed: " <<  curl_easy_strerror(res) << std::endl;
-            return 1;
-        }
+        do
+        {
+            responseCode = 0;
+            res = curl_easy_perform(curl);
+            
+            if (res != CURLE_OK) {
+            	std::cerr << "curl_easy_perform() failed: " <<  curl_easy_strerror(res) << std::endl;
+            	retryCounter++;
+            	if (retryCounter <= UPLOAD_RETRY)
+            	{
+            		std::cout << "Retrying an upload..." << retryCounter << std::endl;
+            		sleep(1);
+            	} else
+            	{
+            		std::cerr << "Max number of retries reached... givin up" << std::endl;
+            		curl_easy_cleanup(curl);
+            		return 1;
+            	}
+            } else {
+            	// check the return code				
+            	curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &responseCode);
+            	std::cout << "Debug: status code " << responseCode << std::endl;
+            	if (responseCode >= 400) {
+            		// error range
+            		res = CURLE_HTTP_RETURNED_ERROR;
+            		retryCounter++;
+            		if (retryCounter <= UPLOAD_RETRY)
+            		{
+            			std::cout << "Retrying an upload after http error..." << retryCounter << std::endl;
+            			sleep(1);
+            		} else
+            		{
+            			std::cerr << "Max number of retries reached... givin up" << std::endl;
+            			curl_easy_cleanup(curl);
+            			return 1;
+            		}
+            	}
+            }
+        } while (res != CURLE_OK);
 
         // cleanup
         curl_easy_cleanup(curl);
@@ -462,4 +517,6 @@ void AzureDev::get_fpga_serialNo(std::string &fpgaSerialNo)
     std::string errmsg;
     dev->sysfs_get("xmc", "serial_num", errmsg, fpgaSerialNo);
     //fpgaSerialNo = "1281002AT024";
+    if (fpgaSerialNo.empty())
+        fpgaSerialNo = FPGA_SERIAL_NUMBER.at(index);
 }

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 OR Apache-2.0 */
 /*
  * A GEM style (optionally CMA backed) device manager for ZynQ based
  * OpenCL accelerators.
@@ -10,14 +11,8 @@
  *    Min Ma       <min.ma@xilinx.com>
  *    Jan Stephan  <j.stephan@hzdr.de>
  *
- * This software is licensed under the terms of the GNU General Public
- * License version 2, as published by the Free Software Foundation, and
- * may be copied, distributed, and modified under those terms.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * This file is dual-licensed; you may select either the GNU General Public
+ * License version 2 or Apache License, Version 2.0.
  */
 
 #include <linux/dma-buf.h>
@@ -156,17 +151,36 @@ static int get_reserved_mem_region(struct device *dev, struct resource *res)
 }
 
 /**
- * get_apt_index - Get the index of the geiven phys address,
+ * update_cu_idx_in_apt - Set scheduler CU index in aperture
+ *
+ * @zdev: zocl device struct
+ * @apt_idx: aperture index in the IP_LAYOUT ordering
+ * @cu_idx: CU index in the scheduler ordering
+ *
+ */
+void update_cu_idx_in_apt(struct drm_zocl_dev *zdev, int apt_idx, int cu_idx)
+{
+	struct addr_aperture *apts = zdev->apertures;
+
+	/* Actually, we should consider lock this.
+	 * So far, let do this without lock. Since the scheduler would only
+	 * update this when xclbin was changed.
+	 */
+	apts[apt_idx].cu_idx = cu_idx;
+}
+
+/**
+ * get_apt_index_by_addr - Get the index of the geiven phys address,
  *		   if it is the start of an aperture
  *
- * @dev: DRM device struct
- * @size: This size was not use, just to match function prototype.
+ * @zdev: zocl device struct
+ * @addr: physical address of the aperture
  *
  * Returns the index if aperture was found.
  * Returns -EINVAL if not found.
  *
  */
-int get_apt_index(struct drm_zocl_dev *zdev, phys_addr_t addr)
+int get_apt_index_by_addr(struct drm_zocl_dev *zdev, phys_addr_t addr)
 {
 	struct addr_aperture *apts = zdev->apertures;
 	int i;
@@ -174,6 +188,34 @@ int get_apt_index(struct drm_zocl_dev *zdev, phys_addr_t addr)
 	/* Haven't consider search efficiency yet. */
 	for (i = 0; i < zdev->num_apts; ++i)
 		if (apts[i].addr == addr)
+			break;
+
+	return (i == zdev->num_apts) ? -EINVAL : i;
+}
+
+/**
+ * get_apt_index_by_cu_idx - Get the index of the geiven phys address,
+ *		   if it is the start of an aperture
+ *
+ * @zdev: zocl device struct
+ * @cu_idx: CU index
+ *
+ * Returns the index if aperture was found.
+ * Returns -EINVAL if not found.
+ *
+ */
+int get_apt_index_by_cu_idx(struct drm_zocl_dev *zdev, int cu_idx)
+{
+	struct addr_aperture *apts = zdev->apertures;
+	int i;
+
+	WARN_ON(cu_idx >= MAX_CU_NUM);
+	if (cu_idx >= MAX_CU_NUM)
+		return -EINVAL;
+
+	/* Haven't consider search efficiency yet. */
+	for (i = 0; i < zdev->num_apts; ++i)
+		if (apts[i].cu_idx == cu_idx)
 			break;
 
 	return (i == zdev->num_apts) ? -EINVAL : i;
@@ -621,7 +663,11 @@ static const struct file_operations zocl_driver_fops = {
 };
 
 static struct drm_driver zocl_driver = {
+#if KERNEL_VERSION(5, 4, 0) > LINUX_VERSION_CODE
 	.driver_features           = DRIVER_GEM | DRIVER_PRIME | DRIVER_RENDER,
+#else
+	.driver_features           = DRIVER_GEM | DRIVER_RENDER,
+#endif
 	.open                      = zocl_client_open,
 	.postclose                 = zocl_client_release,
 	.gem_free_object           = zocl_free_bo,

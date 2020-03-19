@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 OR Apache-2.0 */
 /*
  * MPSoC based OpenCL accelerators Compute Units.
  *
@@ -6,14 +7,8 @@
  * Authors:
  *    Min Ma      <min.ma@xilinx.com>
  *
- * This software is licensed under the terms of the GNU General Public
- * License version 2, as published by the Free Software Foundation, and
- * may be copied, distributed, and modified under those terms.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * This file is dual-licensed; you may select either the GNU General Public
+ * License version 2 or Apache License, Version 2.0.
  */
 
 
@@ -106,6 +101,14 @@ zocl_cu_status_print(struct zocl_cu *cu)
 
 	DRM_INFO("addr 0x%llx, status 0x%x",
 	    (u64)cu_core->paddr, ioread32(cu_core->vaddr));
+}
+
+u32
+zocl_cu_get_control(struct zocl_cu *cu)
+{
+	struct zcu_core *cu_core = cu->core;
+
+	return cu_core->control;
 }
 
 /* -- HLS adapter start -- */
@@ -334,6 +337,8 @@ zocl_hls_cu_init(struct zocl_cu *cu, phys_addr_t paddr)
 		return -ENOMEM;
 	}
 
+	core->control = paddr & 0x7;
+	paddr = paddr & ZOCL_KDS_MASK;
 	core->paddr = paddr;
 	core->vaddr = ioremap(paddr, CU_SIZE);
 	if (!core->vaddr) {
@@ -471,6 +476,7 @@ zocl_acc_cu_init(struct zocl_cu *cu, phys_addr_t paddr)
 	core->credits = core->max_credits;
 
 	core->intr_type = 0;
+	core->control = 0;
 
 	cu->done_cnt = 0;
 	cu->ready_cnt = 0;

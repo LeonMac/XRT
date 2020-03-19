@@ -101,9 +101,11 @@ namespace xdp {
     };
     writeTableHeader(getStream(), "Data Transfer: Host to Global Memory",
         DataTransferSummaryColumnLabels);
+
     if ((flowMode != xdp::RTUtil::CPU) && (flowMode != xdp::RTUtil::COSIM_EM)) {
       profile->writeTransferSummary(this, xdp::RTUtil::MON_HOST_DYNAMIC);
     }
+
     writeTableFooter(getStream());
 
     // Table 6: Data Transfer: Kernels to Global Memory
@@ -506,15 +508,7 @@ namespace xdp {
     }
 
     // 3. Global memory bit widths
-    std::string checkName3;
-    XDPPluginI::getGuidanceName(XDPPluginI::MEMORY_BIT_WIDTH, checkName3);
-    uint32_t bitWidth = profile->getGlobalMemoryBitWidth();
-
-    for(auto& itr : deviceExecTimesMap) {
-      writeTableRowStart(getStream());
-      writeTableCells(getStream(), checkName3, itr.first /*deviceName*/, bitWidth);
-      writeTableRowEnd(getStream());
-    }
+    // Replaced by memory type bit widths
 
     // 4. Usage of MigrateMemObjects
     std::string checkName4;
@@ -524,24 +518,15 @@ namespace xdp {
     writeTableRowEnd(getStream());
 
     // 5. Usage of memory resources
-    std::string checkName5;
-    XDPPluginI::getGuidanceName(XDPPluginI::MEMORY_USAGE, checkName5);
-
-    auto cuPortVector = mPluginHandle->getCUPortVector();
-    std::map<std::string, int> cuPortsToMemory;
-
-    for (auto& cuPort : cuPortVector) {
-      auto memoryName = std::get<3>(cuPort);
-      auto iter = cuPortsToMemory.find(memoryName);
-      int numPorts = (iter == cuPortsToMemory.end()) ? 1 : (iter->second + 1);
-      cuPortsToMemory[memoryName] = numPorts;
+    {
+      std::string check;
+      auto map = mPluginHandle->getDeviceMemUsageStatsMap();
+      XDPPluginI::getGuidanceName(XDPPluginI::MEMORY_USAGE, check);
+      for (auto const& it : map) {
+        writeTableCells(getStream(), check, it.first, it.second);
+        writeTableRowEnd(getStream());
+      }
     }
-
-    for(auto& itr : cuPortsToMemory) {
-      writeTableCells(getStream(), checkName5, itr.first, itr.second);
-      writeTableRowEnd(getStream());
-    }
-    cuPortsToMemory.clear();
 
     // 5a. PLRAM device
     std::string checkName5a;
@@ -581,6 +566,7 @@ namespace xdp {
     // 6. Port data widths
     std::string checkName6;
     XDPPluginI::getGuidanceName(XDPPluginI::PORT_BIT_WIDTH, checkName6);
+    auto cuPortVector = mPluginHandle->getCUPortVector();
 
     for (auto& cuPort : cuPortVector) {
       auto cu    = std::get<0>(cuPort);
@@ -620,6 +606,121 @@ namespace xdp {
     int ctxUsed = mPluginHandle->isCtxEn() ? 1 : 0;
     writeTableCells(getStream(), checkName10, "all", ctxUsed);
     writeTableRowEnd(getStream());
+
+    // Max Parallel Enqueues for each kernel
+    {
+      std::string check;
+      auto map = mPluginHandle->getKernelMaxParallelStartsMap();
+      XDPPluginI::getGuidanceName(XDPPluginI::MAX_PARALLEL_KERNEL_ENQUEUES, check);
+      for (auto const& it : map) {
+        writeTableCells(getStream(), check, it.first, it.second);
+        writeTableRowEnd(getStream());
+      }
+    }
+
+    // Out of order Command Queues
+    {
+      std::string check;
+      auto map = mPluginHandle->getmCQInfoMap();
+      XDPPluginI::getGuidanceName(XDPPluginI::COMMAND_QUEUE_OOO, check);
+      for (auto const& it : map) {
+        writeTableCells(getStream(), check, it.first, it.second);
+        writeTableRowEnd(getStream());
+      }
+    }
+
+    // PLRAM Sizes on devices
+    {
+      std::string check;
+      auto map = mPluginHandle->getDevicePlramSizeMap();
+      XDPPluginI::getGuidanceName(XDPPluginI::PLRAM_SIZE_BYTES, check);
+      for (auto const& it : map) {
+        writeTableCells(getStream(), check, it.first, it.second);
+        writeTableRowEnd(getStream());
+      }
+    }
+
+    // Kernel Buffer Info
+    {
+      std::string check;
+      auto map = mPluginHandle->getKernelBufferInfoMap();
+      XDPPluginI::getGuidanceName(XDPPluginI::KERNEL_BUFFER_INFO, check);
+      for (auto const& it : map) {
+        for (auto const& entry: it.second) {
+          writeTableCells(getStream(), check, entry);
+          writeTableRowEnd(getStream());
+        }
+      }
+    }
+
+    // If Trace Buffer is Full on devices
+    {
+      std::string check;
+      auto map = mPluginHandle->getDeviceTraceBufferFullMap();
+      XDPPluginI::getGuidanceName(XDPPluginI::TRACE_BUFFER_FULL, check);
+      for (auto const& it : map) {
+        writeTableCells(getStream(), check, it.first, it.second);
+        writeTableRowEnd(getStream());
+      }
+    }
+
+    // Bit widths of each memory type on devices
+    {
+      std::string check;
+      auto map = mPluginHandle->getDeviceMemTypeBitWidthMap();
+      XDPPluginI::getGuidanceName(XDPPluginI::MEMORY_TYPE_BIT_WIDTH, check);
+      for (auto const& it : map) {
+        writeTableCells(getStream(), check, it.first, it.second);
+        writeTableRowEnd(getStream());
+      }
+    }
+
+    // xrt.ini settings
+    {
+      std::string check;
+      auto map = mPluginHandle->getXrtIniMap();
+      XDPPluginI::getGuidanceName(XDPPluginI::XRT_INI_SETTING, check);
+      for (auto const& it : map) {
+        writeTableCells(getStream(), check, it.first, it.second);
+        writeTableRowEnd(getStream());
+      }
+    }
+
+    // Time period during which host buffer read transfers were active
+    {
+      std::string check;
+      double time = mPluginHandle->getRdBufferActiveTimeMs();
+      XDPPluginI::getGuidanceName(XDPPluginI::BUFFER_RD_ACTIVE_TIME_MS, check);
+      writeTableCells(getStream(), check, "all", time);
+      writeTableRowEnd(getStream());
+    }
+
+    // Time period during which host buffer write transfers were active
+    {
+      std::string check;
+      double time = mPluginHandle->getWrBufferActiveTimeMs();
+      XDPPluginI::getGuidanceName(XDPPluginI::BUFFER_WR_ACTIVE_TIME_MS, check);
+      writeTableCells(getStream(), check, "all", time);
+      writeTableRowEnd(getStream());
+    }
+
+    // Time period during which all host buffer transfers were active
+    {
+      std::string check;
+      double time = mPluginHandle->getBufferActiveTimeMs();
+      XDPPluginI::getGuidanceName(XDPPluginI::BUFFER_TX_ACTIVE_TIME_MS, check);
+      writeTableCells(getStream(), check, "all", time);
+      writeTableRowEnd(getStream());
+    }
+
+    // Application Run Time Ms
+    {
+      std::string check;
+      double time = mPluginHandle->getApplicationRunTimeMs();
+      XDPPluginI::getGuidanceName(XDPPluginI::APPLICATION_RUN_TIME_MS, check);
+      writeTableCells(getStream(), check, "all", time);
+      writeTableRowEnd(getStream());
+    }
   }
 
 } // xdp

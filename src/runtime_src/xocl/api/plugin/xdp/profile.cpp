@@ -189,14 +189,20 @@ void
 log(xocl::event* event, cl_int status)
 {
   if (!s_exiting)
+  {
     event->trigger_profile_action(status,"");
+    event->trigger_lop_action(status);
+  }
 }
 
 void
 log(xocl::event* event, cl_int status, const std::string& cuname)
 {
   if (!s_exiting)
+  {
     event->trigger_profile_action(status,cuname);
+    event->trigger_lop_action(status);
+  }
 }
 
 void
@@ -447,9 +453,16 @@ function_call_logger(const char* function, long long address)
   //This call here should occur just once per application run
   if (!s_load_xdp) {
     s_load_xdp = true;
-    if (xrt::config::get_app_debug() || xrt::config::get_profile()) {
+    if (xrt::config::get_profile()) {
       xrt::hal::load_xdp();
     }
+#ifdef _WIN32
+    // Application debug not supported on Windows
+#else
+    if (xrt::config::get_app_debug()) {
+      xrt::hal::load_xdp_app_debug();
+    }
+#endif
   }
 
   m_funcid = m_funcid_global++;

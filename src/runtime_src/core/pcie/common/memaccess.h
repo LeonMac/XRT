@@ -173,7 +173,7 @@ namespace xcldev {
 
       size_t count = aSize;
       uint64_t incr;
-      xrt_core::ios_flags_restore format(std::cout);
+      auto guard = xrt_core::utils::ios_restore(std::cout);
       for (uint64_t phy = aStartAddr; phy < aStartAddr+aSize; phy += incr) {
         incr = (count >= blockSize) ? blockSize : count;
         //std::cout << "Reading from addr " << std::hex << phy << " aSize = " << std::hex << incr << std::dec << std::endl;
@@ -330,8 +330,6 @@ namespace xcldev {
                                     << std::dec << std::endl;
       }
       std::ofstream outFile(aFilename, std::ofstream::out | std::ofstream::binary);
-      char temp[32] = "====START of DDR Data=========\n";
-      outFile.write(temp, sizeof(temp));
 
       size_t count = size;
       for(auto it = startbank; it!=vec_banks.end(); ++it) {
@@ -355,8 +353,7 @@ namespace xcldev {
           break;
         }
       }
-      strncpy(temp, "\n=====END of DDR Data=========\n", sizeof(temp));
-      outFile.write(temp, sizeof(temp));
+
       outFile.close();
       std::cout << "INFO: Read data saved in file: " << aFilename << "; Num of bytes: " << std::dec << count-size << " bytes " << std::endl;
       return size;

@@ -26,6 +26,11 @@
 #define	FAULT_STATUS				0x0
 #define	SOFT_CTRL				0x4
 #define	UNBLOCK_CTRL				0x8
+#define MAX_CONTINUOUS_RTRANSFERS_WAITS 	0x30
+#define MAX_WRITE_TO_BVALID_WAITS		0x34
+#define MAX_ARREADY_WAITS 			0x38
+#define MAX_AWREADY_WAITS 			0x3C
+#define MAX_WREADY_WAITS 			0x40
 // Firewall error bits
 #define READ_RESPONSE_BUSY                        BIT(0)
 #define RECS_ARREADY_MAX_WAIT                     BIT(1)
@@ -37,9 +42,6 @@
 #define RECS_WREADY_MAX_WAIT                      BIT(18)
 #define RECS_WRITE_TO_BVALID_MAX_WAIT             BIT(19)
 #define ERRS_BRESP                                BIT(20)
-
-// Get the timezone info from the linux kernel
-extern struct timezone sys_tz;
 
 #define	FIREWALL_STATUS_BUSY	(READ_RESPONSE_BUSY | WRITE_RESPONSE_BUSY)
 #define	CLEAR_RESET_GPIO		0
@@ -59,8 +61,12 @@ extern struct timezone sys_tz;
 #define	FW_DEFAULT_EXPIRE_SECS		1
 #define	MAX_LEVEL			16
 
+#define	FW_MAX_WAIT_DEFAULT 		0xffff
+#define FW_MAX_WAIT_FIC			0x2000
+
 struct firewall {
 	void __iomem		*base_addrs[MAX_LEVEL];
+	u32			base_max_wait[MAX_LEVEL];
 	u32			max_level;
 
 	u32			curr_status;
@@ -289,16 +295,17 @@ static u32 check_firewall(struct platform_device *pdev, int *level)
 		if (val) {
 			res = platform_get_resource(pdev, IORESOURCE_MEM, i);
 			if (res) {
-				xocl_ioaddr_to_baroff(xdev, res->start,
+				(void) xocl_ioaddr_to_baroff(xdev, res->start,
 					&bar_idx, &bar_off);
 			}
-			xocl_info(&pdev->dev, "AXI Firewall %d tripped, status: 0x%x, bar offset 0x%llx", i, val, bar_off);
+			xocl_info(&pdev->dev,
+				"AXI Firewall %d tripped, status: 0x%x, bar offset 0x%llx, resource %s",
+				i, val, bar_off, (res && res->name) ? res->name : "N/A");
 			if (!fw->curr_status) {
 				fw->err_detected_status = val;
 				fw->err_detected_level = i;
 				XOCL_GETTIME(&time);
-				fw->err_detected_time = (u64)(time.tv_sec -
-					(sys_tz.tz_minuteswest * 60));
+				fw->err_detected_time = (u64)time.tv_sec;
 			}
 			fw->curr_level = i;
 
@@ -310,6 +317,20 @@ static u32 check_firewall(struct platform_device *pdev, int *level)
 
 	fw->curr_status = val;
 	fw->curr_level = i >= fw->max_level ? -1 : i;
+
+	if (val) {
+		for (i = 0; i < fw->max_level; i++) {
+			res = platform_get_resource(pdev, IORESOURCE_MEM, i);
+			if (res) {
+				(void) xocl_ioaddr_to_baroff(xdev, res->start,
+					&bar_idx, &bar_off);
+			}
+			xocl_info(&pdev->dev,
+				"Firewall %d, ep %s, status: 0x%x, bar offset 0x%llx",
+				i, (res && res->name) ? res->name : "N/A",
+				READ_STATUS(fw, i), bar_off);
+		}
+	}
 
 	/* Inject firewall for testing. */
 	if (fw->curr_level == -1 && fw->inject_firewall) {
@@ -392,7 +413,69 @@ static void af_get_data(struct platform_device *pdev, void *buf)
 	}
 }
 
+static void inline reset_max_wait(struct firewall *fw, int idx)
+{
+	u32 value = fw->base_max_wait[idx];
+	void __iomem *addr = fw->base_addrs[idx];
+
+	if (value == 0 || addr == NULL)
+		return;
+
+	XOCL_WRITE_REG32(value, addr + MAX_CONTINUOUS_RTRANSFERS_WAITS);
+	XOCL_WRITE_REG32(value, addr + MAX_WRITE_TO_BVALID_WAITS);
+	XOCL_WRITE_REG32(value, addr + MAX_ARREADY_WAITS);
+	XOCL_WRITE_REG32(value, addr + MAX_AWREADY_WAITS);
+	XOCL_WRITE_REG32(value, addr + MAX_WREADY_WAITS);
+}
+
+static void inline update_max_wait(struct firewall *fw, int idx, u32 value)
+{
+	fw->base_max_wait[idx] = value;
+}
+
+static void
+resource_max_wait_set(struct resource *res, struct firewall *fw, int idx)
+{
+	const char *res_name = res->name;
+
+	if (!res_name)
+		return;
+
+	if (!strncmp(res_name, NODE_AF_CTRL_MGMT, strlen(NODE_AF_CTRL_MGMT)) ||
+	    !strncmp(res_name, NODE_AF_CTRL_USER, strlen(NODE_AF_CTRL_USER)) ||
+	    !strncmp(res_name, NODE_AF_CTRL_DEBUG, strlen(NODE_AF_CTRL_DEBUG))) {
+		update_max_wait(fw, idx, FW_MAX_WAIT_FIC);
+		reset_max_wait(fw, idx);
+	}
+}
+
+static int firewall_offline(struct platform_device *pdev)
+{
+	/* so far nothing to do */
+	return 0;
+}
+
+static int firewall_online(struct platform_device *pdev)
+{
+	struct firewall *fw;
+	int i;
+
+	fw = platform_get_drvdata(pdev);
+	if (!fw) {
+		xocl_err(&pdev->dev, "driver data is NULL");
+		return -EINVAL;
+	}
+
+	/* reset max_wait settings */
+	for (i = 0; i < MAX_LEVEL; i++)
+		reset_max_wait(fw, i);
+
+	return 0;
+}
+
 static struct xocl_firewall_funcs fw_ops = {
+	.offline_cb	= firewall_offline,
+	.online_cb	= firewall_online,
 	.clear_firewall	= clear_firewall,
 	.check_firewall = check_firewall,
 	.get_prop = get_prop,
@@ -448,8 +531,9 @@ static int firewall_probe(struct platform_device *pdev)
 			xocl_err(&pdev->dev, "Map iomem failed");
 			goto failed;
 		}
+		/* additional check after res mapped */
+		resource_max_wait_set(res, fw, i);
 	}
-
 
 	ret = sysfs_create_group(&pdev->dev.kobj, &firewall_attrgroup);
 	if (ret) {

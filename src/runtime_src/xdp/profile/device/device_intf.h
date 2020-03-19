@@ -79,6 +79,10 @@ namespace xdp {
     void     getMonitorName(xclPerfMonType type, uint32_t index, char* name, uint32_t length);
     XDP_EXPORT
     std::string  getMonitorName(xclPerfMonType type, uint32_t index);
+    XDP_EXPORT
+    std::string  getTraceMonName(xclPerfMonType type, uint32_t index);
+    XDP_EXPORT
+    uint32_t  getTraceMonProperty(xclPerfMonType type, uint32_t index);
 
     bool     isHostAIM(uint32_t index) {
        return aimList[index]->isHostMonitor();
@@ -86,11 +90,11 @@ namespace xdp {
     
     // Counters
     XDP_EXPORT
-    size_t startCounters(xclPerfMonType type);
+    size_t startCounters();
     XDP_EXPORT
-    size_t stopCounters(xclPerfMonType type);
+    size_t stopCounters();
     XDP_EXPORT
-    size_t readCounters(xclPerfMonType type, xclCounterResults& counterResults);
+    size_t readCounters(xclCounterResults& counterResults);
 
     // Accelerator Monitor
     XDP_EXPORT
@@ -98,16 +102,28 @@ namespace xdp {
     XDP_EXPORT
     void configAmContext(const std::string& ctx_info);
 
+    // Underlying Device APIs
+    XDP_EXPORT
+    size_t allocTraceBuf(uint64_t sz ,uint8_t memIdx);
+    XDP_EXPORT
+    void freeTraceBuf(size_t bufHandle);
+    XDP_EXPORT
+    void* syncTraceBuf(size_t bufHandle ,uint64_t offset, uint64_t bytes);
+    XDP_EXPORT
+    uint64_t getDeviceAddr(size_t bufHandle);
+
     // Trace FIFO Management
     bool hasFIFO() {return (fifoCtrl != nullptr);};
     XDP_EXPORT
-    uint32_t getTraceCount(xclPerfMonType type);
+    uint32_t getTraceCount();
     XDP_EXPORT
-    size_t startTrace(xclPerfMonType type, uint32_t startTrigger);
+    size_t startTrace(uint32_t startTrigger);
     XDP_EXPORT
-    size_t stopTrace(xclPerfMonType type);
+    void clockTraining(bool force = true);
     XDP_EXPORT
-    size_t readTrace(xclPerfMonType type, xclTraceResultsVector& traceVector);
+    size_t stopTrace();
+    XDP_EXPORT
+    size_t readTrace(xclTraceResultsVector& traceVector);
 
     /** Trace S2MM Management
      */
@@ -123,6 +139,8 @@ namespace xdp {
 
     XDP_EXPORT
     void parseTraceData(void* traceData, uint64_t bytes, xclTraceResultsVector& traceVector);
+
+    inline xdp::Device* getAbstractDevice() { return mDevice ; }
 
   private:
     // Turn on/off debug messages to stdout

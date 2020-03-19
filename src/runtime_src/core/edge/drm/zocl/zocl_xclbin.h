@@ -1,17 +1,12 @@
+/* SPDX-License-Identifier: GPL-2.0 OR Apache-2.0 */
 /*
  * Copyright (C) 2019 Xilinx, Inc. All rights reserved.
  *
  * Authors:
  *    David Zhang <davidzha@xilinx.com>
  *
- * This software is licensed under the terms of the GNU General Public
- * License version 2, as published by the Free Software Foundation, and
- * may be copied, distributed, and modified under those terms.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * This file is dual-licensed; you may select either the GNU General Public
+ * License version 2 or Apache License, Version 2.0.
  */
 
 #ifndef _ZOCL_XCLBIN_H_
@@ -38,6 +33,8 @@ int zocl_xclbin_read_axlf(struct drm_zocl_dev *zdev,
 int zocl_xclbin_load_pdi(struct drm_zocl_dev *zdev, void *data);
 
 bool zocl_xclbin_accel_adapter(int kds_mask);
+bool zocl_xclbin_legacy_intr(struct drm_zocl_dev *zdev);
+u32  zocl_xclbin_intr_id(struct drm_zocl_dev *zdev, u32 idx);
 bool zocl_xclbin_cus_support_intr(struct drm_zocl_dev *zdev);
 
 #endif /* _ZOCL_XCLBIN_H_ */

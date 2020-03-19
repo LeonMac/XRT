@@ -23,7 +23,7 @@
 #include "xdp/profile/profile_config.h"
 #include "xdp/profile/collection/results.h"
 #include "xdp/profile/collection/counters.h"
-#include "xdp/profile/device/trace_parser.h"
+#include "xdp/profile/core/trace_parser.h"
 #include "xdp/profile/writer/base_profile.h"
 #include "xdp/profile/writer/base_trace.h"
 
@@ -33,9 +33,10 @@
 #include <iomanip>
 
 #ifdef _WIN32
-#pragma warning(disable : 4996 4244)
+#pragma warning(disable : 4996 4244 4702)
 /* 4996 : Disable warning for use of "getenv" */
 /* 4244 : Disable warning for conversion of int to char in header file <algorithm> included in one of the header files */
+/* 4702 : Disable warning for unreachable code. This is a temporary workaround for a crash on Windows */
 #endif
 
 namespace xdp {

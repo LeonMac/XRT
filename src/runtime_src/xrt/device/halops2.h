@@ -113,8 +113,6 @@ private:
   typedef uint32_t (* countTraceFuncType)(xclDeviceHandle handle, xclPerfMonType type);
   typedef size_t (* readTraceFuncType)(xclDeviceHandle handle, xclPerfMonType type,
                                        xclTraceResultsVector& traceVector);
-  typedef void (* writeHostEventFuncType)(xclDeviceHandle handle, xclPerfMonEventType type,
-                                          xclPerfMonEventID id);
   typedef size_t (* debugReadIPStatusFuncType)(xclDeviceHandle handle, xclDebugReadType type,
                                                void* debugResults);
 
@@ -134,15 +132,18 @@ private:
   typedef int     (*pollQueuesFuncType)(xclDeviceHandle handle,int min, int max, xclReqCompletion* completions, int* actual, int timeout);
 //End Streaming
 
+  typedef void (*getDebugIpLayoutType)(xclDeviceHandle hdl, char* buffer, size_t size, size_t* size_ret);
+
   //APIs using sysfs
   typedef uint32_t(*xclGetNumLiveProcessesFuncType)(xclDeviceHandle handle);
   typedef int     (*xclGetSysfsPathFuncType)(xclDeviceHandle handle, const char* subdev, const char* entry, char* sysfsPath, size_t size);
+  typedef int     (*xclGetSubdevPathFuncType)(xclDeviceHandle handle, const char* subdev, uint32_t idx, char* path, size_t size);
 
   typedef int     (*xclGetDebugIPlayoutPathFuncType)(xclDeviceHandle handle, char* layoutPath, size_t size);
 
   typedef int (*xclGetTraceBufferInfoFuncType)(xclDeviceHandle handle, uint32_t nSamples, uint32_t& traceSamples, uint32_t& traceBufSz);
   typedef int (*xclReadTraceDataFuncType)(xclDeviceHandle handle, void* traceBuf, uint32_t traceBufSz, uint32_t numSamples, uint64_t ipBaseAddress, uint32_t& wordsPerSample);
-
+ 
 private:
   const std::string mFileName;
   const void *mDriverHandle;
@@ -199,7 +200,6 @@ public:
   stopTraceFuncType mStopTrace;
   countTraceFuncType mCountTrace;
   readTraceFuncType mReadTrace;
-  writeHostEventFuncType mWriteHostEvent;
   debugReadIPStatusFuncType mDebugReadIPStatus;
 //Streaming
   createWriteQueueFuncType mCreateWriteQueue;
@@ -212,9 +212,12 @@ public:
   pollQueuesFuncType mPollQueues;
 //End Streaming
 
+  getDebugIpLayoutType mGetDebugIpLayout;
+
   // APIs using sysfs
   xclGetNumLiveProcessesFuncType mGetNumLiveProcesses;
   xclGetSysfsPathFuncType mGetSysfsPath;
+  xclGetSubdevPathFuncType mGetSubdevPath;
 
   xclGetDebugIPlayoutPathFuncType mGetDebugIPlayoutPath;
   xclGetTraceBufferInfoFuncType mGetTraceBufferInfo;

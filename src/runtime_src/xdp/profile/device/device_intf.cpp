@@ -166,6 +166,52 @@ DeviceIntf::~DeviceIntf()
     return std::string("");
   }
 
+  std::string DeviceIntf::getTraceMonName(xclPerfMonType type, uint32_t index)
+  {
+    if (type == XCL_PERF_MON_MEMORY) {
+      for (auto& ip: aimList) {
+        if (ip->hasTraceID(index))
+          return ip->getName();
+      }
+    }
+    if (type == XCL_PERF_MON_ACCEL) {
+      for (auto& ip: amList) {
+        if (ip->hasTraceID(index))
+          return ip->getName();
+      }
+    }
+    if (type == XCL_PERF_MON_STR) {
+      for (auto& ip: asmList) {
+        if (ip->hasTraceID(index))
+          return ip->getName();
+      }
+    }
+    return std::string("");
+  }
+
+  uint32_t DeviceIntf::getTraceMonProperty(xclPerfMonType type, uint32_t index)
+  {
+    if (type == XCL_PERF_MON_MEMORY) {
+      for (auto& ip: aimList) {
+        if (ip->hasTraceID(index))
+          return ip->getProperties();;
+      }
+    }
+    if (type == XCL_PERF_MON_ACCEL) {
+      for (auto& ip: amList) {
+        if (ip->hasTraceID(index))
+          return ip->getProperties();;
+      }
+    }
+    if (type == XCL_PERF_MON_STR) {
+      for (auto& ip: asmList) {
+        if (ip->hasTraceID(index))
+          return ip->getProperties();;
+      }
+    }
+    return 0;
+  }
+
   uint32_t DeviceIntf::getMonitorProperties(xclPerfMonType type, uint32_t index)
   {
     if((type == XCL_PERF_MON_MEMORY) && (index < aimList.size())) { return aimList[index]->getProperties(); }
@@ -180,11 +226,11 @@ DeviceIntf::~DeviceIntf()
   // ***************************************************************************
 
   // Start device counters performance monitoring
-  size_t DeviceIntf::startCounters(xclPerfMonType type)
+  size_t DeviceIntf::startCounters()
   {
     if (mVerbose) {
       std::cout << __func__ << ", " << std::this_thread::get_id() << ", "
-                << type << ", Start device counters..." << std::endl;
+                << ", Start device counters..." << std::endl;
     }
 
     // Update addresses for debug/profile IP
@@ -212,10 +258,10 @@ DeviceIntf::~DeviceIntf()
   }
 
   // Stop both profile and trace performance monitoring
-  size_t DeviceIntf::stopCounters(xclPerfMonType type) {
+  size_t DeviceIntf::stopCounters() {
     if (mVerbose) {
       std::cout << __func__ << ", " << std::this_thread::get_id() << ", "
-          << type << ", Stop and reset device counters..." << std::endl;
+                << ", Stop and reset device counters..." << std::endl;
     }
 
     if (!mIsDeviceProfiling)
@@ -245,10 +291,10 @@ DeviceIntf::~DeviceIntf()
   }
 
   // Read AIM performance counters
-  size_t DeviceIntf::readCounters(xclPerfMonType type, xclCounterResults& counterResults) {
+  size_t DeviceIntf::readCounters(xclCounterResults& counterResults) {
     if (mVerbose) {
       std::cout << __func__ << ", " << std::this_thread::get_id()
-      << ", " << type << ", " << &counterResults
+      << ", " << &counterResults
       << ", Read device counters..." << std::endl;
     }
 
@@ -286,7 +332,7 @@ DeviceIntf::~DeviceIntf()
   // ***************************************************************************
 
   // Start trace performance monitoring
-  size_t DeviceIntf::startTrace(xclPerfMonType type, uint32_t startTrigger)
+  size_t DeviceIntf::startTrace(uint32_t startTrigger)
   {
     // StartTrigger Bits:
     // Bit 0: Trace Coarse/Fine     Bit 1: Transfer Trace Ctrl
@@ -294,10 +340,16 @@ DeviceIntf::~DeviceIntf()
     // Bit 4: Str Trace Ctrl        Bit 5: Ext Trace Ctrl
     if (mVerbose) {
       std::cout << __func__ << ", " << std::this_thread::get_id()
-                << ", " << type << ", " << startTrigger
+                << ", " << startTrigger
                 << ", Start device tracing..." << std::endl;
     }
     size_t size = 0;
+
+    // These should be reset before anything
+    if (fifoCtrl)
+      fifoCtrl->reset();
+    if (traceFunnel)
+      traceFunnel->reset();
 
     // This just writes to trace control register
     // Axi Interface Mons
@@ -313,23 +365,36 @@ DeviceIntf::~DeviceIntf()
         size += mon->triggerTrace(startTrigger);
     }
 
-    if (fifoCtrl)
-      fifoCtrl->reset();
-
+    uint32_t traceVersion = 0;
     if (traceFunnel) {
-      traceFunnel->reset();
-      traceFunnel->initiateClockTraining();
+      if (traceFunnel->compareVersion(1,0) == -1)
+        traceVersion = 1;
     }
+
+    if (fifoRead)
+      fifoRead->setTraceFormat(traceVersion);
+
+    if (traceDMA)
+      traceDMA->setTraceFormat(traceVersion);
 
     return size;
   }
 
+  void DeviceIntf::clockTraining(bool force)
+  {
+    if(!traceFunnel)
+      return;
+    // Trace Funnel > 1.0 supports continuous training
+    if (traceFunnel->compareVersion(1,0) == -1 || force == true)
+      traceFunnel->initiateClockTraining();
+  }
+
   // Stop trace performance monitoring
-  size_t DeviceIntf::stopTrace(xclPerfMonType type)
+  size_t DeviceIntf::stopTrace()
   {
     if (mVerbose) {
       std::cout << __func__ << ", " << std::this_thread::get_id() << ", "
-                << type << ", Stop and reset device tracing..." << std::endl;
+                << ", Stop and reset device tracing..." << std::endl;
     }
 
     if (!mIsDeviceProfiling || !fifoCtrl)
@@ -339,10 +404,9 @@ DeviceIntf::~DeviceIntf()
   }
 
   // Get trace word count
-  uint32_t DeviceIntf::getTraceCount(xclPerfMonType type) {
+  uint32_t DeviceIntf::getTraceCount() {
     if (mVerbose) {
-      std::cout << __func__ << ", " << std::this_thread::get_id()
-                << ", " << type << std::endl;
+      std::cout << __func__ << ", " << std::this_thread::get_id() << std::endl;
     }
 
     if (!mIsDeviceProfiling || !fifoCtrl)
@@ -352,11 +416,11 @@ DeviceIntf::~DeviceIntf()
   }
 
   // Read all values from APM trace AXI stream FIFOs
-  size_t DeviceIntf::readTrace(xclPerfMonType type, xclTraceResultsVector& traceVector)
+  size_t DeviceIntf::readTrace(xclTraceResultsVector& traceVector)
   {
     if (mVerbose) {
       std::cout << __func__ << ", " << std::this_thread::get_id()
-                << ", " << type << ", " << &traceVector
+                << ", " << &traceVector
                 << ", Reading device trace stream..." << std::endl;
     }
 
@@ -365,7 +429,7 @@ DeviceIntf::~DeviceIntf()
    	  return 0;
 
     size_t size = 0;
-    size += fifoRead->readTrace(traceVector, getTraceCount(type /*does not matter*/));
+    size += fifoRead->readTrace(traceVector, getTraceCount());
 
     return size;
   }
@@ -375,6 +439,7 @@ DeviceIntf::~DeviceIntf()
     if(mIsDebugIPlayoutRead || !mDevice)
         return;
 
+#ifndef _WIN32
     std::string path = mDevice->getDebugIPlayoutPath();
     if(path.empty()) {
         // error ? : for HW_emu this will be empty for now ; but as of current status should not have been called 
@@ -401,9 +466,21 @@ DeviceIntf::~DeviceIntf()
     char buffer[65536];
     // debug_ip_layout max size is 65536
     ifs.read(buffer, 65536);
+
+
     debug_ip_layout *map;
     if (ifs.gcount() > 0) {
       map = (debug_ip_layout*)(buffer);
+#else
+    size_t sz1 = 0, sectionSz = 0;
+    // Get the size of full debug_ip_layout
+    mDevice->getDebugIpLayout(nullptr, sz1, &sectionSz);
+    // Allocate buffer to retrieve debug_ip_layout information from loaded xclbin
+    std::vector<char> buffer(sectionSz);
+    mDevice->getDebugIpLayout(buffer.data(), sectionSz, &sz1);
+    auto map = reinterpret_cast<debug_ip_layout*>(buffer.data());
+#endif
+      
       for(uint64_t i = 0; i < map->m_count; i++ ) {
       switch(map->m_debug_ip_data[i].m_type) {
         case AXI_MM_MONITOR :        aimList.push_back(new AIM(mDevice, i, &(map->m_debug_ip_data[i])));
@@ -425,9 +502,10 @@ DeviceIntf::~DeviceIntf()
 
       }
      }
+#ifndef _WIN32
     }
-
     ifs.close();
+#endif
 
     auto sorter = [] (const ProfileIP* lhs, const ProfileIP* rhs)
     {
@@ -467,7 +545,7 @@ DeviceIntf::~DeviceIntf()
 
     uint32_t i = 0;
     for(auto mon: amList) {
-        mon->configureDataflow(ipConfig[i++]);
+      mon->configureDataflow(ipConfig[i++]);
     }
   }
 
@@ -480,29 +558,69 @@ DeviceIntf::~DeviceIntf()
     }
   }
 
+  size_t DeviceIntf::allocTraceBuf(uint64_t sz ,uint8_t memIdx)
+  {
+    auto bufHandle = mDevice->alloc(sz, memIdx);
+    // Can't read a buffer xrt hasn't written to
+    mDevice->sync(bufHandle, sz, 0, xdp::Device::direction::HOST2DEVICE);
+    return bufHandle;
+  }
+
+  void DeviceIntf::freeTraceBuf(size_t bufHandle)
+  {
+    mDevice->free(bufHandle);
+  }
+
+  /**
+  * Takes the offset inside the mapped buffer
+  * and syncs it with device and returns its virtual address.
+  * We can read the entire buffer in one go if we want to
+  * or choose to read in chunks
+  */
+  void* DeviceIntf::syncTraceBuf(size_t bufHandle ,uint64_t offset, uint64_t bytes)
+  {
+    auto addr = mDevice->map(bufHandle);
+    if (!addr)
+      return nullptr;
+    mDevice->sync(bufHandle, bytes, offset, xdp::Device::direction::DEVICE2HOST);
+    return static_cast<char*>(addr) + offset;
+  }
+
+  uint64_t DeviceIntf::getDeviceAddr(size_t bufHandle)
+  {
+    return mDevice->getDeviceAddr(bufHandle);
+  }
+
   void DeviceIntf::initTS2MM(uint64_t bufSz, uint64_t bufAddr)
   {
-    traceDMA->init(bufSz, bufAddr);
+    if (traceDMA)
+      traceDMA->init(bufSz, bufAddr);
   }
 
   uint64_t DeviceIntf::getWordCountTs2mm()
   {
-    return traceDMA->getWordCount();
+    if (traceDMA)
+      return traceDMA->getWordCount();
+    return 0;
   }
 
   uint8_t DeviceIntf::getTS2MmMemIndex()
   {
-    return traceDMA->getMemIndex();
+    if (traceDMA)
+      return traceDMA->getMemIndex();
+    return 0;
   }
 
   void DeviceIntf::resetTS2MM()
   {
-    traceDMA->reset();
+    if (traceDMA)
+      traceDMA->reset();
   }
 
   void DeviceIntf::parseTraceData(void* traceData, uint64_t bytes, xclTraceResultsVector& traceVector)
   {
-    traceDMA->parseTraceBuf(traceData, bytes, traceVector);
+    if (traceDMA)
+      traceDMA->parseTraceBuf(traceData, bytes, traceVector);
   }
 
 } // namespace xdp

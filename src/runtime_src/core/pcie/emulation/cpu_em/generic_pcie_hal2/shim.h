@@ -27,9 +27,11 @@
 #include "xcl_api_macros.h"
 #include "xcl_macros.h"
 #include "xclbin.h"
+#include "core/common/device.h"
 #include "core/common/scheduler.h"
 #include "core/common/message.h"
 #include "core/common/xrt_profiling.h"
+#include "swscheduler.h"
 
 #include <stdarg.h>
 #include <sys/mman.h>
@@ -51,6 +53,7 @@ namespace xclcpuemhal2 {
       static const unsigned CONTROL_AP_START;
       static const unsigned CONTROL_AP_DONE;
       static const unsigned CONTROL_AP_IDLE;
+      static const unsigned CONTROL_AP_CONTINUE;
 
   private:
       // This is a hidden signature of this class and helps in preventing
@@ -65,7 +68,7 @@ namespace xclcpuemhal2 {
   public:
       // HAL2 RELATED member functions start
       unsigned int xclAllocBO(size_t size, int unused, unsigned flags);
-      int xoclCreateBo(xclemulation::xocl_create_bo *info);
+      uint64_t xoclCreateBo(xclemulation::xocl_create_bo *info);
       void* xclMapBO(unsigned int boHandle, bool write);
       int xclUnmapBO(unsigned int boHandle, void* addr);
       int xclSyncBO(unsigned int boHandle, xclBOSyncDirection dir, size_t size, size_t offset);
@@ -154,7 +157,16 @@ namespace xclcpuemhal2 {
       int xclExecBuf(unsigned int cmdBO);
       int xclCloseContext(const uuid_t xclbinId, unsigned int ipIndex) const;
 
+      bool isImported(unsigned int _bo)
+      {
+        if (mImportedBOs.find(_bo) != mImportedBOs.end())
+          return true;
+        return false;
+      }
+      struct exec_core* getExecCore() { return mCore; }
+      SWScheduler* getScheduler() { return mSWSch; }
     private:
+      std::shared_ptr<xrt_core::device> mCoreDevice;
       std::mutex mMemManagerMutex;
 
       // Performance monitoring helper functions
@@ -228,6 +240,10 @@ namespace xclcpuemhal2 {
       uint64_t mReqCounter;
       FeatureRomHeader mFeatureRom;
 
+      std::set<unsigned int > mImportedBOs;
+      exec_core* mCore;
+      SWScheduler* mSWSch;
+      bool mIsKdsSwEmu;
   };
 
   extern std::map<unsigned int, CpuemShim*> devices;

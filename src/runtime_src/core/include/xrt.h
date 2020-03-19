@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015-2019, Xilinx Inc - All rights reserved
+ * Copyright (C) 2015-2020, Xilinx Inc - All rights reserved
  * Xilinx Runtime (XRT) APIs
  *
  * Licensed under the Apache License, Version 2.0 (the "License"). You may
@@ -410,15 +410,15 @@ xclUnlockDevice(xclDeviceHandle handle);
  *
  * @handle:        Device handle
  * @xclbinId:      UUID of the xclbin image running on the device
- * @ipIndex:       IP/CU index in the IP LAYOUT array
+ * @ipIndex:       IP index
  * @shared:        Shared access or exclusive access
  * Return:         0 on success or appropriate error number
  *
  * The context is necessary before submitting execution jobs using
  * xclExecBuf(). Contexts may be exclusive or shared. Allocation of
- * exclusive contexts on a compute unit would succeed only if another
- * client has not already setup up a context on that compute
- * unit. Shared contexts can be concurrently allocated by many
+ * exclusive contexts on a hardware IP would succeed only if another
+ * client has not already setup up a context on that hardware IP.
+ * Shared contexts can be concurrently allocated by many
  * processes on the same compute units.
  */
 XCL_DRIVER_DLLESPEC
@@ -431,10 +431,10 @@ xclOpenContext(xclDeviceHandle handle, xuid_t xclbinId, unsigned int ipIndex,
  *
  * @handle:        Device handle
  * @xclbinId:      UUID of the xclbin image running on the device
- * @ipIndex:       IP/CU index in the IP LAYOUT array
+ * @ipIndex:       ipIndex
  * Return:         0 on success or appropriate error number
  *
- * Close a previously allocated shared/exclusive context for a compute unit.
+ * Close a previously allocated shared/exclusive context for a hardware IP.
  */
 XCL_DRIVER_DLLESPEC
 int
@@ -705,7 +705,6 @@ xclGetBOProperties(xclDeviceHandle handle, xclBufferHandle boHandle,
 /*
  * xclGetBOSize() - Retrieve size of a BO
  *
- *
  * @handle:        Device handle
  * @boHandle:      BO handle
  * Return          size_t size of the BO on success
@@ -718,7 +717,7 @@ static inline size_t
 xclGetBOSize(xclDeviceHandle handle, xclBufferHandle boHandle)
 {
     struct xclBOProperties p;
-    return !xclGetBOProperties(handle, boHandle, &p) ? (size_t)p.size : -1;
+    return !xclGetBOProperties(handle, boHandle, &p) ? (size_t)p.size : (size_t)-1;
 }
 
 /*
@@ -736,7 +735,7 @@ static inline uint64_t
 xclGetDeviceAddr(xclDeviceHandle handle, xclBufferHandle boHandle)
 {
     struct xclBOProperties p;
-    return !xclGetBOProperties(handle, boHandle, &p) ? p.paddr : -1;
+    return !xclGetBOProperties(handle, boHandle, &p) ? p.paddr : (uint64_t)-1;
 }
 
 /* End XRT Buffer Management APIs */
@@ -841,7 +840,7 @@ xclWrite(xclDeviceHandle handle, enum xclAddressSpace space, uint64_t offset,
  *
  * This API may be used to read from device registers exposed on PCIe
  * BAR. Offset is relative to the the address space. A device may have
- * many address spaces.  
+ * many address spaces.
  * *This API is deprecated. Please use xclRegRead(), instead.*
  */
 XRT_DEPRECATED

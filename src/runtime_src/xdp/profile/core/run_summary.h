@@ -41,7 +41,11 @@ class RunSummary {
       FT_UNKNOWN,
       FT_PROFILE,
       FT_TRACE,
-      FT_WDB
+      FT_WDB,
+      FT_WDB_CONFIG,
+      FT_POWER_PROFILE,
+      FT_KERNEL_PROFILE,
+      FT_KERNEL_TRACE
     };
 
   public:
@@ -51,6 +55,7 @@ class RunSummary {
     ~RunSummary();
 
   public:
+    XDP_EXPORT
     void addFile(const std::string & fileName, FileType eFileType);
     XDP_EXPORT
     void setProfileTree(std::shared_ptr<boost::property_tree::ptree> tree);
@@ -71,7 +76,7 @@ class RunSummary {
   private:
     // Purposefully private and undefined ctors...
     RunSummary(const RunSummary& obj);
-    RunSummary& operator=(const RunSummary& obj); 
+    RunSummary& operator=(const RunSummary& obj);
 };
 
 

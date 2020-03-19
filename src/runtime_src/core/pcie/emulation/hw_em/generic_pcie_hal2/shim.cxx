@@ -15,6 +15,7 @@
  */
 
 #include "shim.h"
+#include "system_hwemu.h"
 #include <string.h>
 #include <boost/property_tree/xml_parser.hpp>
 #include <errno.h>
@@ -175,6 +176,9 @@ namespace xclhwemhal2 {
       PRINTENDFUNC;
       return -1;
     }
+
+    //check xclbin version with vivado tool version
+    xclemulation::checkXclibinVersionWithTool(header);
 
     auto top = reinterpret_cast<const axlf*>(header);
     if (auto sec = xclbin::get_axlf_section(top, EMBEDDED_METADATA)) {
@@ -488,6 +492,13 @@ namespace xclhwemhal2 {
               continue;
             uint64_t base = convert(xml_remap.second.get<std::string>("<xmlattr>.base"));
             mCuBaseAddress = base & 0xFFFFFFFF00000000;
+            std::string vbnv  = mDeviceInfo.mName;
+            //BAD Worharound for vck5000 need to remove once SIM_QDMA supports PCIE bar 
+            if(xclemulation::config::getInstance()->getCuBaseAddrForce()!=-1) {
+              mCuBaseAddress = xclemulation::config::getInstance()->getCuBaseAddrForce();
+            } else if(!vbnv.empty() && (  vbnv.find("vck5000-es1_g3x16_202010_1") != std::string::npos)) {
+              mCuBaseAddress = 0x20200000000;
+            }
             mKernelOffsetArgsInfoMap[base] = kernelArgInfo;
             if (xclemulation::config::getInstance()->isMemLogsEnabled())
             {
@@ -513,11 +524,15 @@ namespace xclhwemhal2 {
     bool simDontRun = xclemulation::config::getInstance()->isDontRun();
     std::string launcherArgs = xclemulation::config::getInstance()->getLauncherArgs();
     std::string wdbFileName("");
+    std::string kernelProfileFileName("profile_kernels.csv");
+    std::string kernelTraceFileName("timeline_kernels.csv");
     // The following is evil--hardcoding. This name may change.
     // Is there a way we can determine the name from the directories or otherwise?
     std::string bdName("dr"); // Used to be opencldesign. This is new default.
 
     unsetenv("VITIS_WAVEFORM_WDB_FILENAME");
+    unsetenv("VITIS_KERNEL_PROFILE_FILENAME");
+    unsetenv("VITIS_KERNEL_TRACE_FILENAME");
 
     if (!simDontRun)
     {
@@ -545,6 +560,8 @@ namespace xclhwemhal2 {
         unsetenv("VITIS_LAUNCH_WAVEFORM_BATCH");
         setenv("VITIS_WAVEFORM", generatedWcfgFileName.c_str(), true);
         setenv("VITIS_WAVEFORM_WDB_FILENAME", std::string(wdbFileName + ".wdb").c_str(), true);
+        setenv("VITIS_KERNEL_PROFILE_FILENAME", kernelProfileFileName.c_str(), true);
+        setenv("VITIS_KERNEL_TRACE_FILENAME", kernelTraceFileName.c_str(), true);
       }
 
       if (lWaveform == xclemulation::LAUNCHWAVEFORM::BATCH)
@@ -561,6 +578,8 @@ namespace xclhwemhal2 {
         setenv("VITIS_LAUNCH_WAVEFORM_BATCH", "1", true);
         setenv("VITIS_WAVEFORM", generatedWcfgFileName.c_str(), true);
         setenv("VITIS_WAVEFORM_WDB_FILENAME", std::string(wdbFileName + ".wdb").c_str(), true);
+        setenv("VITIS_KERNEL_PROFILE_FILENAME", kernelProfileFileName.c_str(), true);
+        setenv("VITIS_KERNEL_TRACE_FILENAME", kernelTraceFileName.c_str(), true);
       }
 
       if (userSpecifiedSimPath.empty() == false)
@@ -1464,7 +1483,8 @@ uint32_t HwEmShim::getAddressSpace (uint32_t topology)
   }
 
   HwEmShim::HwEmShim( unsigned int deviceIndex, xclDeviceInfo2 &info, std::list<xclemulation::DDRBank>& DDRBankList, bool _unified, bool _xpr, FeatureRomHeader &fRomHeader)
-    :mRAMSize(info.mDDRSize)
+    :mCoreDevice(xrt_core::hwemu::get_userpf_device(this, deviceIndex))
+    ,mRAMSize(info.mDDRSize)
     ,mCoalesceThreshold(4)
     ,mDSAMajorVersion(DSA_MAJOR_VERSION)
     ,mDSAMinorVersion(DSA_MINOR_VERSION)
@@ -1540,6 +1560,35 @@ uint32_t HwEmShim::getAddressSpace (uint32_t topology)
     bool QDMAPlatform = (getDsaVersion() == 60)? true: false;
     return mbSchEnabled && !QDMAPlatform;
   }
+  
+
+  bool HwEmShim::isLegacyErt()
+  {
+    if(xclemulation::config::getInstance()->getLegacyErt() == xclemulation::ERTMODE::LEGACY)
+      return true;
+    else if(xclemulation::config::getInstance()->getLegacyErt() == xclemulation::ERTMODE::UPDATED)
+      return false;
+
+    //Following platforms uses legacyErt As per Emulation team. 
+    //There is no other way to get whether platform uses legacy ERT or not
+    std::string vbnv  = mDeviceInfo.mName;
+    if(!vbnv.empty() && 
+        (  vbnv.find("u200_xdma-gen3x4_201830_2") != std::string::npos 
+        || vbnv.find("u200_xdma_201830_1")        != std::string::npos 
+        || vbnv.find("u200_xdma_201830_2")        != std::string::npos 
+        || vbnv.find("u250_qep_201910_1")         != std::string::npos
+        || vbnv.find("u250_xdma_201830_1")        != std::string::npos 
+        || vbnv.find("u250_xdma_201830_2")        != std::string::npos 
+        || vbnv.find("u280_xdma_201920_1")        != std::string::npos
+        || vbnv.find("u280_xdma_201920_2")        != std::string::npos
+        || vbnv.find("u280_xdma_201920_3")        != std::string::npos
+        || vbnv.find("u50_xdma_201910_1")         != std::string::npos
+        || vbnv.find("u50_xdma_201920_1")         != std::string::npos
+        || vbnv.find("u50_xdma_201920_2")         != std::string::npos))
+      return true;
+
+    return false;
+  }
 
   bool HwEmShim::isCdmaEnabled()
   {
@@ -1575,6 +1624,14 @@ uint32_t HwEmShim::getAddressSpace (uint32_t topology)
       return 60;
   
     return 52;
+  }
+
+  size_t HwEmShim::xclGetDeviceTimestamp()
+  {
+    bool ack = true;
+    size_t deviceTimeStamp = 0;
+    xclGetDeviceTimestamp_RPC_CALL(xclGetDeviceTimestamp,ack,deviceTimeStamp);
+    return deviceTimeStamp;
   }
 
   void HwEmShim::xclReadBusStatus(xclPerfMonType type) {
@@ -2084,7 +2141,7 @@ void *HwEmShim::xclMapBO(unsigned int boHandle, bool write)
   }
 
   void *pBuf=nullptr;
-  if (posix_memalign(&pBuf, sizeof(double)*16, bo->size))
+  if (posix_memalign(&pBuf, getpagesize(), bo->size))
   {
     if (mLogStream.is_open()) mLogStream << "posix_memalign failed" << std::endl;
     pBuf=nullptr;
@@ -2369,6 +2426,65 @@ int HwEmShim::xclReadTraceData(void* traceBuf, uint32_t traceBufSz, uint32_t num
     return size;
 }
 
+double HwEmShim::xclGetDeviceClockFreqMHz()
+{
+  //return 1.0;
+  double clockSpeed;
+  //300.0 MHz
+  clockSpeed = 300.0;
+  return clockSpeed;
+}
+
+// Get the maximum bandwidth for host reads from the device (in MB/sec)
+// NOTE: for now, just return 8.0 GBps (the max achievable for PCIe Gen3)
+double HwEmShim::xclGetReadMaxBandwidthMBps()
+{
+  return 8000.0;
+}
+
+// Get the maximum bandwidth for host writes to the device (in MB/sec)
+// NOTE: for now, just return 8.0 GBps (the max achievable for PCIe Gen3)
+double HwEmShim::xclGetWriteMaxBandwidthMBps()
+{
+  return 8000.0;
+}
+
+uint32_t HwEmShim::getPerfMonNumberSlots(xclPerfMonType type)
+{
+  if (type == XCL_PERF_MON_MEMORY)
+    return mMemoryProfilingNumberSlots;
+  if (type == XCL_PERF_MON_ACCEL)
+    return mAccelProfilingNumberSlots;
+  if (type == XCL_PERF_MON_STALL)
+    return mStallProfilingNumberSlots;
+  if (type == XCL_PERF_MON_HOST)
+    return 1;
+  if (type == XCL_PERF_MON_STR)
+    return mStreamProfilingNumberSlots;
+
+  return 0;
+}
+
+// Get slot name
+void HwEmShim::getPerfMonSlotName(xclPerfMonType type, uint32_t slotnum,
+                                  char* slotName, uint32_t length) {
+  std::string str = "";
+  if (type == XCL_PERF_MON_MEMORY) {
+    str = (slotnum < XAIM_MAX_NUMBER_SLOTS) ? mPerfMonSlotName[slotnum] : "";
+  }
+  if (type == XCL_PERF_MON_ACCEL) {
+    str = (slotnum < XAM_MAX_NUMBER_SLOTS) ? mAccelMonSlotName[slotnum] : "";
+  }
+  if (type == XCL_PERF_MON_STR) {
+    str = (slotnum < XASM_MAX_NUMBER_SLOTS) ? mStreamMonSlotName[slotnum] : "";
+  }
+  if(str.length() < length) {
+   strncpy(slotName, str.c_str(), length);
+  } else {
+   strncpy(slotName, str.c_str(), length-1);
+   slotName[length-1] = '\0';
+  }
+}
 
 
 /********************************************** QDMA APIs IMPLEMENTATION START **********************************************/
@@ -2582,7 +2698,7 @@ void * HwEmShim::xclAllocQDMABuf(size_t size, uint64_t *buf_hdl)
     mLogStream << __func__ << ", " << std::this_thread::get_id() << std::endl;
   }
   void *pBuf=nullptr;
-  if (posix_memalign(&pBuf, sizeof(double)*16, size))
+  if (posix_memalign(&pBuf, getpagesize(), size))
   {
     if (mLogStream.is_open()) mLogStream << "posix_memalign failed" << std::endl;
     pBuf=nullptr;

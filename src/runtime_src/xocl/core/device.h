@@ -25,6 +25,7 @@
 #include "xrt/device/device.h"
 #include "xrt/scheduler/command.h"
 #include "core/common/unistd.h"
+#include "core/common/scope_guard.h"
 
 #include <cassert>
 
@@ -53,26 +54,6 @@ public:
    *   The underlying xrt device managed by the platform
    */
   device(platform* pltf, xrt::device* xdevice);
-
-  /**
-   * Construct a schizophrenic device.
-   *
-   * This device doesn't really know what it wants to be. It could be a
-   * hw device, a swem device, or a hwem device, the actual decision
-   * is in some cases deferred until the program binary is loaded.
-   *
-   */
-  device(platform* pltf, xrt::device* hw_device, xrt::device* swem_device, xrt::device* hwem_device);
-
-  /**
-   * Construct a less schizophrenic device.
-   *
-   * This device is on a path to recovery and only suffers from dual
-   * personality disorder.  It could be a swem device or a hwem
-   * device, the actual decision is in some cases deferred until the
-   * program binary is loaded.
-   */
-  device(platform* pltf, xrt::device* swem_device, xrt::device* hwem_device);
 
   /**
    * Sub device constructor
@@ -165,6 +146,20 @@ public:
   {
     return get_name() + "-" + std::to_string(m_uid);
   }
+
+  /**
+   * Get the BDF of the device
+   *
+   * Throws on error
+   */
+  std::string
+  get_bdf() const;
+
+  /**
+   * Get underlying driver device handle
+   */
+  void*
+  get_handle() const;
 
   /**
    * Get the number of DDR memory banks on the current device
@@ -595,8 +590,8 @@ public:
    * lock count is incremented and returned.
    *
    * If the device is not currently locked, then this function
-   * queries hardware to check if the device is free and then
-   * locks it.
+   * queries hardware to check if the device is free in which 
+   * case it is opened and locked.
    *
    * May throw cl error code if device could not be locked by probing
    * hardware.
@@ -615,7 +610,7 @@ public:
    *
    * If the device is currently locked, then this function
    * decrements the lock count.  If the lock count reaches 0,
-   * the hardware device is unlocked.
+   * the hardware device is unlocked (closed).
    *
    * May throw cl error code if device could not be unlocked by
    * probing hardware.
@@ -626,6 +621,20 @@ public:
    */
   unsigned int
   unlock();
+
+  /**
+   * Return a scoped lock guard managing a lock on the device.
+   *
+   * When the scope goes out of scope, the aquired lock is released
+   * automatically. 
+   */
+  xrt_core::scope_guard<std::function<void()>>
+  lock_guard()
+  {
+    lock();
+    auto unlocker = [](device* d) { d->unlock(); };
+    return {std::bind(unlocker, this)};
+  }
 
   /**
    * Check is this device is available for use by this process.
@@ -679,15 +688,16 @@ public:
   }
 
   /**
-   * Acquire a context for a given compute unit on this device
+   * Acquire a context for a given compute unit on this device.
    *
-   * Throws exception if context cannot be acquired on device
+   * By default the context is acquired as shared.
+   * Throws exception if context cannot be acquired on device.
    *
    * @return
    *   @true on success, @false if no program loaded.
    */
   bool
-  acquire_context(const compute_unit* cu, bool shared=true) const;
+  acquire_context(const compute_unit* cu) const;
 
   /**
    * Release a context for a given compute unit on this device
@@ -707,7 +717,8 @@ public:
   size_t
   get_num_cdmas() const;
 
-  void clear_connection(connidx_type conn);
+  void
+  clear_connection(connidx_type conn);
 
 private:
 
@@ -724,20 +735,6 @@ private:
 
   void
   clear_cus();
-
-  /**
-   * Set xrt device when the final device is determined
-   *
-   * Throws if device is already set
-   */
-  void
-  set_xrt_device(xrt::device* xd,bool final=true);
-
-  /**
-   * Validate xclbin and set xrt device according to xclbin target
-   */
-  void
-  set_xrt_device(const xocl::xclbin& xclbin);
 
   /**
    * Track mem object as allocated on this device
@@ -784,10 +781,6 @@ private:
 
   platform* m_platform = nullptr;
   xrt::device* m_xdevice = nullptr;
-
-  xrt::device* m_hw_device = nullptr;
-  xrt::device* m_swem_device = nullptr;
-  xrt::device* m_hwem_device = nullptr;
 
   // Set for sub-device only
   ptr<device> m_parent = nullptr;

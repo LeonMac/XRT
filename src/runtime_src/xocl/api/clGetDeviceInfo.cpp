@@ -25,6 +25,7 @@
 
 #include <limits>
 #include "plugin/xdp/profile.h"
+#include "plugin/xdp/lop.h"
 
 #ifdef _WIN32
 # pragma warning ( disable : 4267 )
@@ -54,6 +55,9 @@ clGetDeviceInfo(cl_device_id   device,
 
   xocl::param_buffer buffer { param_value, param_value_size, param_value_size_ret };
   auto xdevice = xocl::xocl(device);
+
+  // lock the device to ensure that it is opened if necessary
+  auto lock = xdevice->lock_guard();
 
   switch(param_name) {
   case CL_DEVICE_TYPE:
@@ -301,8 +305,14 @@ clGetDeviceInfo(cl_device_id   device,
   case CL_DEVICE_SVM_CAPABILITIES:
     buffer.as<cl_device_svm_capabilities>() = CL_DEVICE_SVM_COARSE_GRAIN_BUFFER;
     break;
+  case CL_DEVICE_PCIE_BDF:
+    buffer.as<char>() = xdevice->get_bdf();
+    break;
+  case CL_DEVICE_HANDLE:
+    buffer.as<void*>() = xdevice->get_handle();
+    break;
   default:
-    return CL_INVALID_VALUE;
+    throw error(CL_INVALID_VALUE,"clGetDeviceInfo: invalid param_name");
     break;
   }
   return CL_SUCCESS;
@@ -334,6 +344,7 @@ clGetDeviceInfo(cl_device_id    device,
 {
   try {
     PROFILE_LOG_FUNCTION_CALL;
+    LOP_LOG_FUNCTION_CALL;
     return xocl::clGetDeviceInfo
       (device, param_name, param_value_size,param_value, param_value_size_ret);
   }

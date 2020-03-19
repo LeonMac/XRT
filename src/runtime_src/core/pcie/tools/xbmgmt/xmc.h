@@ -109,6 +109,7 @@ public:
     int xclUpgradeFirmware(std::istream& tiTxtStream);
     int xclGetBoardInfo(std::map<char, std::vector<char>>& info);
     const std::string probingErrMsg() { return mProbingErrMsg.str(); }
+    bool hasXMC();
 
 private:
     std::shared_ptr<pcidev::pci_device> mDev;
@@ -125,6 +126,7 @@ private:
     int writeReg(unsigned RegOffset, unsigned value);
     bool isXMCReady();
     bool isBMCReady();
+    bool hasSC();
 
     // Upgrade SC firmware via driver.
     std::FILE *mXmcDev = nullptr;

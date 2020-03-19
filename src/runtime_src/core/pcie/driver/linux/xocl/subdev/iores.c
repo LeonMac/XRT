@@ -25,22 +25,17 @@ struct iores {
 	int			bar_idx[IORES_MAX];
 };
 
-XOCL_DEFINE_IORES_MAP(res_map);
-
-static inline int res_name2id(const char *res_name)
-{
-	int i;
-
-	if (!res_name)
-		return -1;
-	for (i = 0; i < ARRAY_SIZE(res_map); i++) {
-		if (!strncmp(res_name, res_map[i].res_name,
-				strlen(res_map[i].res_name)))
-			return res_map[i].res_id;
-	}
-
-	return -1;
-}
+struct xocl_iores_map res_map[] = {
+	{ RESNAME_GATEPLP, IORES_GATEPLP },
+	{ RESNAME_MEMCALIB, IORES_MEMCALIB },
+	{ RESNAME_GATEULP, IORES_GATEULP },
+	{ RESNAME_KDMA, IORES_KDMA },
+	{ RESNAME_CMC_MUTEX, IORES_CMC_MUTEX},
+	{ RESNAME_GAPPING, IORES_GAPPING},
+	{ RESNAME_CLKFREQ_K1_K2, IORES_CLKFREQ_K1_K2},
+	{ RESNAME_CLKFREQ_HBM, IORES_CLKFREQ_HBM },
+	{ RESNAME_DDR4_RESET_GATE, IORES_DDR4_RESET_GATE}
+};
 
 static int read32(struct platform_device *pdev, u32 id, u32 off, u32 *val)
 {
@@ -128,7 +123,7 @@ static int iores_probe(struct platform_device *pdev)
 	for (i = 0, res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 		res;
 		res = platform_get_resource(pdev, IORESOURCE_MEM, ++i)) {
-		id = res_name2id(res->name);
+		id = xocl_res_name2id(res_map, ARRAY_SIZE(res_map), res->name);
 		if (id > 0) {
 			iores->base_addrs[id] = ioremap_nocache(res->start,
 					res->end - res->start + 1);

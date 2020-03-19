@@ -21,10 +21,13 @@ endif(GIT_FOUND)
 #set(Boost_DEBUG 1)
 
 INCLUDE (FindBoost)
+INCLUDE (FindGTest)
 
 # --- XRT Variables ---
-set (XRT_INSTALL_DIR "${CMAKE_INSTALL_PREFIX}/xrt")
-set (XRT_INSTALL_INCLUDE_DIR "${XRT_INSTALL_DIR}/include")
+set (XRT_INSTALL_DIR "xrt")
+set (XRT_INSTALL_BIN_DIR       "${XRT_INSTALL_DIR}/bin")
+set (XRT_INSTALL_UNWRAPPED_DIR "${XRT_INSTALL_BIN_DIR}/unwrapped")
+set (XRT_INSTALL_INCLUDE_DIR   "${XRT_INSTALL_DIR}/include")
 
 # --- Release: OpenCL extension headers ---
 set(XRT_CL_EXT_SRC
@@ -44,6 +47,8 @@ file(GLOB XRT_EULA
 install (FILES ${CMAKE_CURRENT_SOURCE_DIR}/../LICENSE DESTINATION ${XRT_INSTALL_DIR}/license)
 message("-- XRT EA eula files  ${CMAKE_CURRENT_SOURCE_DIR}/../LICENSE")
 
+# -- CPack
+include (CMake/cpackWin.cmake)
 
 # --- Create Version header and JSON file ---
 include (CMake/version.cmake)

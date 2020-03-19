@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2019 Xilinx, Inc
+ * Copyright (C) 2019-2020 Xilinx, Inc
  *
  * Licensed under the Apache License, Version 2.0 (the "License"). You may
  * not use this file except in compliance with the License. A copy of the
@@ -28,14 +28,23 @@
 const char *subCmdConfigDesc = "Parse or update daemon/device configuration";
 const char *subCmdConfigUsage =
     "--daemon --host ip-or-hostname-for-peer\n"
-    "--device [--card bdf] --security level\n"
-    "--show [--daemon | --device [--card bdf] ]";
+    "--device [--card bdf] [--security level] [--runtime_clk_scale en(dis)able] [--cs_threshold_power_override val]\n"
+    "--show [--daemon | --device [--card bdf]\n"
+    "--enable_retention [--ddr] [--card bdf]\n"
+    "--disable_retention [--ddr] [--card bdf]";
 
 static struct config {
     std::string host;
 } config;
 
 static const std::string configFile("/etc/msd.conf");
+
+enum configs {
+    CONFIG_SECURITY = 0,
+    CONFIG_CLK_SCALING,
+    CONFIG_CS_THRESHOLD_POWER_OVERRIDE,
+};
+typedef configs configType;
 
 static int splitLine(std::string& line, std::string& key, std::string& value)
 {
@@ -122,7 +131,7 @@ static int daemon(int argc, char *argv[])
     // Write it back.
     std::ofstream cfile(configFile);
     if (!cfile.good()) {
-        std::cout << "Can't open config file for writing" << std::endl;
+        std::cout << "Error: Can't open config file for writing" << std::endl;
         return -EINVAL;
     }
 
@@ -148,17 +157,47 @@ static void showDaemonConf(void)
 
 static void showDevConf(std::shared_ptr<pcidev::pci_device>& dev)
 {
-    std::string errmsg;
+    std::string errmsg, svl;
     int lvl = 0;
 
     dev->sysfs_get("icap", "sec_level", errmsg, lvl, 0);
     if (!errmsg.empty()) {
-        std::cout << "can't read security level from " << dev->sysfs_name <<
-            " : " << errmsg << std::endl;
-        return;
+        std::cout << "Error: can't read security level from " << dev->sysfs_name
+			<< " : " << errmsg << "\n";
+    } else {
+        std::cout << dev->sysfs_name << ":\n";
+        std::cout << "\t" << "security level: " << lvl << "\n";
     }
-    std::cout << dev->sysfs_name << ":" << std::endl;
-    std::cout << "\t" << "security level: " << lvl << std::endl;
+
+    lvl = 0;
+    errmsg = "";
+    dev->sysfs_get("xmc", "scaling_enabled", errmsg, lvl, 0);
+    if (!errmsg.empty()) {
+        std::cout << "Error: can't read scaling_enabled status from " <<
+            dev->sysfs_name << " : " << errmsg << std::endl;
+    } else {
+        std::cout << "\t" << "Runtime clock scaling enabled status: " <<
+            lvl << std::endl;
+    }
+
+    errmsg = "";
+    dev->sysfs_get("xmc", "scaling_threshold_power_override", errmsg, svl);
+    if (!errmsg.empty()) {
+        std::cout << "Error: can't read scaling_threshold_power_override from "
+			<< dev->sysfs_name << " : " << errmsg << std::endl;
+    } else {
+        std::cout << "\t" << "scaling_threshold_power_override: " <<
+            svl << std::endl;
+    }
+
+    dev->sysfs_get("icap", "data_retention", errmsg, lvl, 0);
+    if (!errmsg.empty()) {
+        std::cout << "Error: can't read data_retention from " << dev->sysfs_name
+            << " : " << errmsg << "\n";
+            std::cout << "See dmesg log for details" << std::endl;
+    } else {
+        std::cout << "\tData Retention: " << (lvl ? "Enable" : "Disable") << "\n";
+    }
 }
 
 static int show(int argc, char *argv[])
@@ -224,15 +263,36 @@ static int show(int argc, char *argv[])
     return 0;
 }
 
-static void updateDevConf(std::shared_ptr<pcidev::pci_device>& dev,
-    std::string lvl)
+static void updateDevConf(pcidev::pci_device *dev,
+    const std::string lvl, configType config_type)
 {
     std::string errmsg;
-    dev->sysfs_put("icap", "sec_level", errmsg, lvl);
-    if (!errmsg.empty()) {
-        std::cout << "Failed to set security level for " << dev->sysfs_name
-            << std::endl;
-        std::cout << "See dmesg log for details" << std::endl;
+
+    switch(config_type) {
+    case CONFIG_SECURITY:
+        dev->sysfs_put("icap", "sec_level", errmsg, lvl);
+        if (!errmsg.empty()) {
+            std::cout << "Error: Failed to set security level for " <<
+                dev->sysfs_name << "\n";
+            std::cout << "See dmesg log for details" << std::endl;
+        }
+        break;
+    case CONFIG_CLK_SCALING:
+        dev->sysfs_put("xmc", "scaling_enabled", errmsg, lvl);
+        if (!errmsg.empty()) {
+            std::cout << "Error: Failed to update clk scaling status for " <<
+                dev->sysfs_name << "\n";
+            std::cout << "See dmesg log for details" << std::endl;
+        }
+        break;
+    case CONFIG_CS_THRESHOLD_POWER_OVERRIDE:
+        dev->sysfs_put("xmc", "scaling_threshold_power_override", errmsg, lvl);
+        if (!errmsg.empty()) {
+            std::cout << "Error: Failed to update clk scaling power threshold for " <<
+                dev->sysfs_name << "\n";
+            std::cout << "See dmesg log for details" << std::endl;
+        }
+        break;
     }
 }
 
@@ -240,9 +300,12 @@ static int device(int argc, char *argv[])
 {
     unsigned int index = UINT_MAX;
     std::string lvl;
+    configType config_type = (configType)-1;
     const option opts[] = {
         { "card", required_argument, nullptr, '0' },
         { "security", required_argument, nullptr, '1' },
+        { "runtime_clk_scale", required_argument, nullptr, '2' },
+        { "cs_threshold_power_override", required_argument, nullptr, '3' },
         { nullptr, 0, nullptr, 0 },
     };
 
@@ -259,6 +322,15 @@ static int device(int argc, char *argv[])
             break;
         case '1':
             lvl = optarg;
+            config_type = CONFIG_SECURITY;
+            break;
+        case '2':
+            lvl = optarg;
+            config_type = CONFIG_CLK_SCALING;
+            break;
+        case '3':
+            lvl = optarg;
+            config_type = CONFIG_CS_THRESHOLD_POWER_OVERRIDE;
             break;
         default:
             return -EINVAL;
@@ -270,15 +342,78 @@ static int device(int argc, char *argv[])
 
     if (index != UINT_MAX) {
         auto dev = pcidev::get_dev(index, false);
-        updateDevConf(dev, lvl);
+        updateDevConf(dev.get(), lvl, config_type);
         return 0;
     }
 
     for (unsigned i = 0; i < pcidev::get_dev_total(false); i++) {
         auto dev = pcidev::get_dev(i, false);
-        updateDevConf(dev, lvl);
+        updateDevConf(dev.get(), lvl, config_type);
     }
 
+    return 0;
+}
+
+static void memoryRetention(pcidev::pci_device *dev, unsigned int mem_type, bool enable)
+{
+    std::string errmsg;
+
+    dev->sysfs_put("icap", "data_retention", errmsg, enable);
+    if (!errmsg.empty()) {
+        std::cout << "Error: Failed to set data_retention for " <<
+            dev->sysfs_name << "\n";
+        std::cout << "See dmesg log for details" << std::endl;
+    } else {
+        std::cout << (enable ? "Enable" : "Disable") << " successfully" << std::endl;
+    }
+}
+
+static int memory(int argc, char *argv[], bool enable)
+{
+    unsigned int index = UINT_MAX;
+    std::string lvl;
+    unsigned int mem_type = 2;
+    const option opts[] = {
+        { "card", required_argument, nullptr, '0' },
+        { "ddr", no_argument, nullptr, '1' },
+        { "hbm", no_argument, nullptr, '2' },
+        { nullptr, 0, nullptr, 0 },
+    };
+
+    while (true) {
+        const auto opt = getopt_long(argc, argv, "", opts, nullptr);
+        if (opt == -1)
+            break;
+
+        switch (opt) {
+        case '0':
+            index = bdf2index(optarg);
+            if (index == UINT_MAX)
+                return -ENOENT;
+            break;
+        case '1':
+            mem_type = 0;
+            break;
+        case '2':
+            mem_type = 1;
+            break;
+        default:
+            return -EINVAL;
+        }
+    }
+
+    if (mem_type & 2)
+        return -EINVAL;
+
+    if (index != UINT_MAX) {
+        auto dev = pcidev::get_dev(index, false);
+        memoryRetention(dev.get(), mem_type, enable);
+        return 0;
+    }
+    for (unsigned i = 0; i < pcidev::get_dev_total(false); i++) {
+        auto dev = pcidev::get_dev(i, false);
+        memoryRetention(dev.get(), mem_type, enable);
+    }
     return 0;
 }
 
@@ -301,5 +436,9 @@ int configHandler(int argc, char *argv[])
         return device(argc, argv);
     if (op.compare("--purge") == 0) // hidden opt to remove daemon config file
         return purge(argc, argv);
+    if (op.compare("--enable_retention") == 0)
+        return memory(argc, argv, true);
+    if (op.compare("--disable_retention") == 0)
+        return memory(argc, argv, false);
     return -EINVAL;
 }

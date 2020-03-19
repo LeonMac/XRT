@@ -101,6 +101,12 @@ public:
     return m_hal->getName();
   }
 
+  std::string
+  get_bdf() const
+  {
+    return m_hal->get_bdf();
+  }
+
   unsigned int
   getBankCount() const
   {
@@ -132,15 +138,6 @@ public:
   std::ostream&
   printDeviceInfo(std::ostream&) const;
 
-  /**
-   * Hack to accomodate sw_em missing device info
-   */
-  void
-  copyDeviceInfo(const device* src)
-  {
-    m_hal->copyDeviceInfo(src->m_hal.get());
-  }
-
   size_t
   get_cdma_count() const
   {
@@ -158,9 +155,9 @@ public:
    *   If open succeeds then true, false otherwise
    */
   bool
-  open(const char* log=nullptr, verbosity_level level=verbosity_level::quiet)
+  open()
   {
-    return m_hal->open(log,level);
+    return m_hal->open();
   }
 
   void
@@ -549,35 +546,6 @@ public:
     return m_hal->pollStreams(comps, min,max,actual,timeout);
   };
 
-//End Streaming APIs
-#ifdef PMD_OCL
-public:
-  StreamHandle openStream(unsigned depth, unsigned q, direction dir)
-  {
-    return m_hal->openStream(depth, q, dir);
-  }
-  void closeStream(StreamHandle strm)
-  {
-    return m_hal->closeStream(strm);
-  }
-  unsigned send(StreamHandle strm, PacketObject *pkts, unsigned count)
-  {
-    return m_hal->send(strm, pkts, count);
-  }
-  unsigned recv(StreamHandle strm, PacketObject *pkts, unsigned count)
-  {
-    return m_hal->recv(strm, pkts, count);
-  }
-  PacketObject acquirePacket()
-  {
-    return m_hal->acquirePacket();
-  }
-  void releasePacket(PacketObject pkt)
-  {
-    return m_hal->releasePacket(pkt);
-  }
-#endif
-
 private:
   void retain(const BufferObjectHandle& bo)
   {
@@ -631,22 +599,6 @@ public:
     m_uuid = xclbin->m_header.uuid;
     return m_hal->loadXclBin(xclbin);
   }
-
-  /**
-   * Load a bistream from a file
-   *
-   * @param fnm
-   *   Full path to bitsream file
-   * @returns
-   *   A pair <int,bool> where bool is set to true if
-   *   and only if the return int value is valid. The
-   *   return value is implementation dependent.
-   */
-//  hal::operations_result<int>
-//  loadBitstream(const char* fnm)
-//  {
-//    return m_hal->loadBitstream(fnm);
-//  }
 
   bool
   hasBankAlloc() const
@@ -838,12 +790,6 @@ public:
   }
 
   hal::operations_result<void>
-  writeHostEvent(xclPerfMonEventType type, xclPerfMonEventID id)
-  {
-    return m_hal->writeHostEvent(type, id);
-  }
-
-  hal::operations_result<void>
   configureDataflow(xclPerfMonType type, unsigned *ip_config)
   {
     return m_hal->configureDataflow(type, ip_config);
@@ -886,6 +832,12 @@ public:
   }
 
   hal::operations_result<std::string>
+  getSubdevPath(const std::string& subdev, uint32_t idx)
+  {
+    return m_hal->getSubdevPath(subdev, idx);
+  }
+
+  hal::operations_result<std::string>
   getDebugIPlayoutPath()
   {
     return m_hal->getDebugIPlayoutPath();
@@ -901,6 +853,12 @@ public:
   readTraceData(void* traceBuf, uint32_t traceBufSz, uint32_t numSamples, uint64_t ipBaseAddress, uint32_t& wordsPerSample)
   {
     return m_hal->readTraceData(traceBuf, traceBufSz, numSamples, ipBaseAddress, wordsPerSample);
+  }
+
+  hal::operations_result<void>
+  getDebugIpLayout(char* buffer, size_t size, size_t* size_ret)
+  {
+    return m_hal->getDebugIpLayout(buffer, size, size_ret);
   }
 
   /**

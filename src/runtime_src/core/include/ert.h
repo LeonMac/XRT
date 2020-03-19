@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2019, Xilinx Inc
+ *  Copyright (C) 2019-2020, Xilinx Inc
  *
  *  This file is dual licensed.  It may be redistributed and/or modified
  *  under the terms of the Apache 2.0 License OR version 2 of the GNU
@@ -124,7 +124,8 @@ struct ert_start_kernel_cmd {
  * this command initializes CUs by writing CU registers. CUs are
  * represented by cu_mask and extra_cu_masks.
  *
- * @state:           [3-0] current state of a command
+ * @state:           [3-0]   current state of a command
+ * @update_rtp:      [4]     command is for runtime update of cu argument
  * @extra_cu_masks:  [11-10] extra CU masks in addition to mandatory mask
  * @count:           [22-12] number of words following header
  * @opcode:          [27-23] 0, opcode for init_kernel
@@ -148,7 +149,8 @@ struct ert_init_kernel_cmd {
   union {
     struct {
       uint32_t state:4;          /* [3-0]   */
-      uint32_t unused:6;         /* [9-4]  */
+      uint32_t update_rtp:1;     /* [4]  */
+      uint32_t unused:5;         /* [9-5]  */
       uint32_t extra_cu_masks:2; /* [11-10]  */
       uint32_t count:11;         /* [22-12] */
       uint32_t opcode:5;         /* [27-23] */
@@ -399,6 +401,7 @@ enum ert_cmd_type {
   ERT_KDS_LOCAL = 1,
   ERT_CTRL = 2,
   ERT_CU = 3,
+  ERT_SCU = 4,
 };
 
 /**
@@ -412,6 +415,18 @@ enum softkernel_type {
   SOFTKERNEL_TYPE_XCLBIN = 1,
 };
 
+/*
+ * Base address GPIO per spec
+ * | Offset  | Description
+ * -----------------------
+ * | 0x00    | ERT_MGMT_PF_base_addr (Not sure where this should be use)
+ * | 0x08    | ERT_USER_PF_base_addr. The base address of ERT peripherals
+ */
+#if defined(ERT_BUILD_V20)
+uint32_t ert_base_addr = 0;
+# define ERT_BASE_ADDR                     0x01F30008
+#endif
+
 /**
  * Address constants per spec
  */
@@ -421,8 +436,8 @@ enum softkernel_type {
 # define ERT_CQ_BASE_ADDR                  0x340000
 # define ERT_CSR_ADDR                      0x360000
 #elif defined(ERT_BUILD_V20)
-# define ERT_CQ_BASE_ADDR                  0xdeadbeef
-# define ERT_CSR_ADDR                      0xdeadbeef
+# define ERT_CQ_BASE_ADDR                  (0x000000 + ert_base_addr)
+# define ERT_CSR_ADDR                      (0x010000 + ert_base_addr)
 #else
 # define ERT_CQ_BASE_ADDR                  0x190000
 # define ERT_CSR_ADDR                      0x180000
@@ -545,6 +560,7 @@ enum softkernel_type {
  */
 #define	ERT_EXIT_CMD			  ((ERT_EXIT << 23) | ERT_CMD_STATE_NEW)
 #define	ERT_EXIT_ACK			  (ERT_CMD_STATE_COMPLETED)
+#define	ERT_EXIT_CMD_OP			  (ERT_EXIT << 23)
 
 /**
  * State machine for both CUDMA and CUISR modules

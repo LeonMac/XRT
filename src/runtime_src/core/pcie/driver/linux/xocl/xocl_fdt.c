@@ -91,7 +91,6 @@ failed:
 static void *flash_build_priv(xdev_handle_t xdev_hdl, void *subdev, size_t *len)
 {
 	struct xocl_dev_core *core = XDEV(xdev_hdl);
-	char *priv = NULL;
 	const char *flash_type;
 	void *blob;
 	int node, proplen;
@@ -116,10 +115,11 @@ static void *flash_build_priv(xdev_handle_t xdev_hdl, void *subdev, size_t *len)
 		return NULL;
 	}
 
-	proplen = strlen(flash_type) + 1;
+	BUG_ON(strlen(flash_type) + 1 > sizeof(flash_priv->flash_type));
+	proplen = sizeof(struct xocl_flash_privdata);
 
 	flash_priv = vzalloc(sizeof(*flash_priv));
-	if (!priv)
+	if (!flash_priv)
 		return NULL;
 
 	strcpy(flash_priv->flash_type, flash_type);
@@ -127,7 +127,6 @@ static void *flash_build_priv(xdev_handle_t xdev_hdl, void *subdev, size_t *len)
 	*len = proplen;
 
 	return flash_priv;
-
 }
 
 static void devinfo_cb_setlevel(void *dev_hdl, void *subdevs, int num)
@@ -137,12 +136,28 @@ static void devinfo_cb_setlevel(void *dev_hdl, void *subdevs, int num)
 	subdev->info.override_idx = subdev->info.level;
 }
 
-static void ert_cb_setlevel(void *dev_hdl, void *subdevs, int num)
+static void ert_cb_set_inst(void *dev_hdl, void *subdevs, int num)
 {
 	struct xocl_subdev *subdev = subdevs;
 
 	/* 0 is used by CMC */
-	subdev->info.override_idx = 1;
+	subdev->info.override_idx = XOCL_MB_ERT;
+}
+
+static void devinfo_cb_plp_gate(void *dev_hdl, void *subdevs, int num)
+{
+	struct xocl_subdev *subdev = subdevs;
+
+	subdev->info.level = XOCL_SUBDEV_LEVEL_BLD;
+	subdev->info.override_idx = subdev->info.level;
+}
+
+static void devinfo_cb_ulp_gate(void *dev_hdl, void *subdevs, int num)
+{
+	struct xocl_subdev *subdev = subdevs;
+
+	subdev->info.level = XOCL_SUBDEV_LEVEL_PRP;
+	subdev->info.override_idx = subdev->info.level;
 }
 
 static void devinfo_cb_xdma(void *dev_hdl, void *subdevs, int num)
@@ -236,7 +251,8 @@ static struct xocl_subdev_map		subdev_map[] = {
 		XOCL_SUBDEV_AF,
 		XOCL_FIREWALL,
 		{
-			NODE_AF_BLP,
+			NODE_AF_BLP_CTRL_MGMT,
+			NODE_AF_BLP_CTRL_USER,
 			NODE_AF_CTRL_MGMT,
 			NODE_AF_CTRL_USER,
 			NODE_AF_CTRL_DEBUG,
@@ -252,7 +268,6 @@ static struct xocl_subdev_map		subdev_map[] = {
 		XOCL_SUBDEV_MB,
 		XOCL_ERT,
 		{
-			NODE_ERT_BASE,
 			NODE_ERT_RESET,
 			NODE_ERT_FW_MEM,
 			NODE_ERT_CQ_MGMT,
@@ -262,7 +277,7 @@ static struct xocl_subdev_map		subdev_map[] = {
 		3,
 		0,
 		NULL,
-		ert_cb_setlevel,
+		ert_cb_set_inst,
 	},
 	{
 		XOCL_SUBDEV_MB,
@@ -303,25 +318,30 @@ static struct xocl_subdev_map		subdev_map[] = {
 		XOCL_SUBDEV_AXIGATE,
 		XOCL_AXIGATE,
 		{
-			NODE_GATE_BLP,
+			NODE_GATE_PLP,
 			NULL,
 		},
 		1,
 		0,
 		NULL,
-		devinfo_cb_setlevel,
+		devinfo_cb_plp_gate,
+	},
+	{
+		XOCL_SUBDEV_AXIGATE,
+		XOCL_AXIGATE,
+		{
+			NODE_GATE_ULP,
+			NULL,
+		},
+		1,
+		0,
+		NULL,
+		devinfo_cb_ulp_gate,
 	},
 	{
 		XOCL_SUBDEV_IORES,
 		XOCL_IORES3,
 		{
-			RESNAME_CLKWIZKERNEL1,
-			RESNAME_CLKWIZKERNEL2,
-			RESNAME_CLKWIZKERNEL3,
-			RESNAME_CLKFREQ_K1,
-			RESNAME_CLKFREQ_K2,
-			RESNAME_CLKFREQ_HBM,
-			RESNAME_UCS_CONTROL_STATUS,
 			RESNAME_GAPPING,
 			NULL
 		},
@@ -335,13 +355,20 @@ static struct xocl_subdev_map		subdev_map[] = {
 		XOCL_SUBDEV_IORES,
 		XOCL_IORES2,
 		{
-			RESNAME_GATEPRPRP,
 			RESNAME_MEMCALIB,
-			RESNAME_CLKWIZKERNEL1,
-			RESNAME_CLKWIZKERNEL2,
-			RESNAME_CLKWIZKERNEL3,
 			RESNAME_KDMA,
-			RESNAME_CLKSHUTDOWN,
+			RESNAME_DDR4_RESET_GATE,
+			NULL
+		},
+		1,
+		0,
+		NULL,
+		devinfo_cb_setlevel,
+	},
+	{
+		XOCL_SUBDEV_IORES,
+		XOCL_IORES1,
+		{
 			RESNAME_CMC_MUTEX,
 			NULL
 		},
@@ -349,6 +376,26 @@ static struct xocl_subdev_map		subdev_map[] = {
 		0,
 		NULL,
 		devinfo_cb_setlevel,
+	},
+	{
+		.id = XOCL_SUBDEV_CLOCK,
+		.dev_name = XOCL_CLOCK,
+		.res_names = {
+			RESNAME_CLKWIZKERNEL1,
+			RESNAME_CLKWIZKERNEL2,
+			RESNAME_CLKWIZKERNEL3,
+			RESNAME_CLKFREQ_K1_K2,
+			RESNAME_CLKFREQ_HBM,
+			RESNAME_CLKFREQ_K1,
+			RESNAME_CLKFREQ_K2,
+			RESNAME_CLKSHUTDOWN,
+			RESNAME_UCS_CONTROL_STATUS,
+			NULL
+		},
+		.required_ip = 1,
+		.flags = 0,
+		.build_priv_data = NULL,
+		.devinfo_cb = NULL,
 	},
 	{
 		XOCL_SUBDEV_ICAP,
@@ -375,7 +422,6 @@ static struct xocl_subdev_map		subdev_map[] = {
 		NULL,
 	},
 };
-
 
 /*
  * Functions to parse dtc and create sub devices
@@ -533,8 +579,12 @@ static int xocl_fdt_parse_ip(xdev_handle_t xdev_hdl, char *blob,
 			"IP %s, PF index not found", ip->name);
 		return -EINVAL;
 	}
+
+#if PF == MGMTPF
+	/* mgmtpf driver checks pfnum. it will not create userpf subdevices */
 	if (ntohl(*pfnum) != XOCL_PCI_FUNC(xdev_hdl))
 		return 0;
+#endif
 
 	bar_idx = fdt_getprop(blob, off, PROP_BAR_IDX, NULL);
 
@@ -714,9 +764,11 @@ static int xocl_fdt_get_devinfo(xdev_handle_t xdev_hdl, char *blob,
 
 	subdev->pf = XOCL_PCI_FUNC(xdev_hdl);
 
+#if PF == MGMTPF
 	if ((map_p->flags & XOCL_SUBDEV_MAP_USERPF_ONLY) &&
 			subdev->pf != xocl_fdt_get_userpf(xdev_hdl, blob))
 		goto failed;
+#endif
 
 	num = 1;
 	if (!rtn_subdevs)
@@ -727,6 +779,7 @@ static int xocl_fdt_get_devinfo(xdev_handle_t xdev_hdl, char *blob,
 	//subdev->pf = XOCL_PCI_FUNC(xdev_hdl);
 	subdev->info.res = subdev->res;
 	subdev->info.bar_idx = subdev->bar_idx;
+	subdev->info.override_idx = -1;
 	for (i = 0; i < subdev->info.num_res; i++)
 		subdev->info.res[i].name = subdev->res_name[i];
 
@@ -805,6 +858,8 @@ int xocl_fdt_parse_blob(xdev_handle_t xdev_hdl, char *blob, u32 blob_sz,
 		struct xocl_subdev **subdevs)
 {
 	int		dev_num; 
+
+	*subdevs = NULL;
 
 	if (!blob)
 		return -EINVAL;
@@ -1072,4 +1127,41 @@ const struct axlf_section_header *xocl_axlf_section_header(
 				kind);
 
 	return hdr;
+}
+
+int
+xocl_res_name2id(const struct xocl_iores_map *res_map,
+	int res_map_size, const char *res_name)
+{
+	int i;
+
+	if (!res_name)
+		return -1;
+	for (i = 0; i < res_map_size; i++) {
+		if (!strncmp(res_name, res_map->res_name,
+				strlen(res_map->res_name)))
+			return res_map->res_id;
+		res_map++;
+	}
+
+	return -1;
+}
+
+
+char *
+xocl_res_id2name(const struct xocl_iores_map *res_map,
+	int res_map_size, int id)
+{
+	int i;
+
+	if (id > res_map_size)
+		return NULL;
+
+	for (i = 0; i < res_map_size; i++) {
+		if (res_map->res_id == id)
+			return res_map->res_name;
+		res_map++;
+	}
+
+	return NULL;
 }

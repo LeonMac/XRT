@@ -38,12 +38,13 @@ const char *subCmdFlashDesc = "Update SC firmware or shell on the device";
 const char *subCmdFlashUsage =
     "--scan [--verbose|--json]\n"
     "--update [--shell name [--id id]] [--card bdf] [--force]\n"
-    "--factory_reset [--card bdf]\n\n"
+    "--factory_reset [--card bdf] [--force]\n\n"
     "Experts only:\n"
     "--shell --path file --card bdf [--type flash_type]\n"
     "--sc_firmware --path file --card bdf";
 
 #define fmt_str		"    "
+#define DEV_TIMEOUT	60
 
 static int scanDevices(bool verbose, bool json)
 {
@@ -82,7 +83,6 @@ static int scanDevices(bool verbose, bool json)
                 sensor_tree::put(card + ".mac2", info.mMacAddr2);
                 sensor_tree::put(card + ".mac3", info.mMacAddr3);
             }
-            sensor_tree::json_dump( std::cout );
         } else {
             std::cout << "Card [" << f.sGetDBDF() << "]" << std::endl;
             std::cout << fmt_str << "Card type:\t\t" << board.board << std::endl;
@@ -129,22 +129,73 @@ static int scanDevices(bool verbose, bool json)
         }
     }
 
+    if (json)
+        sensor_tree::json_dump( std::cout );
+
     return 0;
+}
+
+static int writeSCImage(Flasher &flasher, const char *file)
+{
+    int ret = 0;
+
+    std::shared_ptr<firmwareImage> bmc =
+       std::make_shared<firmwareImage>(file, BMC_FIRMWARE);
+    if (bmc->fail()) {
+        ret = -EINVAL;
+    } else {
+        ret = flasher.upgradeBMCFirmware(bmc.get());
+    }
+    return ret;
 }
 
 // Update SC firmware on the board.
 static int updateSC(unsigned index, const char *file)
 {
+    int ret = 0;
     Flasher flasher(index);
     if(!flasher.isValid())
         return -EINVAL;
 
-    std::shared_ptr<firmwareImage> bmc =
-        std::make_shared<firmwareImage>(file, BMC_FIRMWARE);
-    if (bmc->fail())
-        return -EINVAL;
+    bool is_mfg = false;
+    std::string errmsg;
+    auto mgmt_dev = pcidev::get_dev(index, false);
 
-    return flasher.upgradeBMCFirmware(bmc.get());
+    mgmt_dev->sysfs_get<bool>("", "mfg", errmsg, is_mfg, false);
+    if (is_mfg) {
+        return writeSCImage(flasher, file);
+    }
+
+    ret = mgmt_dev->shutdown();
+    if (ret) {
+        std::cout << "Only proceed with SC update if all user applications for the target card(s) are stopped." << std::endl;
+        return ret;
+    }
+
+    ret = writeSCImage(flasher, file);
+
+    auto dev = mgmt_dev->lookup_peer_dev();
+
+    dev->sysfs_put("", "shutdown", errmsg, "0\n");
+    if (!errmsg.empty()) {
+        std::cout << "ERROR: online userpf failed. Please warm reboot." << std::endl;
+	return ret;
+    }
+
+    int wait = 0;
+    do {
+        auto hdl =dev->open("", O_RDWR);
+        if (hdl != -1) {
+            dev->close(hdl);
+            break;
+        }
+        sleep(1);
+    } while (++wait < DEV_TIMEOUT);
+    if (wait == DEV_TIMEOUT) {
+        std::cout << "ERROR: user function does not back online. Please warm reboot." << std::endl;
+    }
+
+    return ret;
 }
 
 // Update shell on the board.
@@ -183,7 +234,7 @@ static int updateShell(unsigned index, std::string flashType,
 }
 
 // Reset shell to factory mode.
-static int resetShell(unsigned index)
+static int resetShell(unsigned index, bool force)
 {
     Flasher flasher(index);
     if(!flasher.isValid())
@@ -191,10 +242,24 @@ static int resetShell(unsigned index)
 
     std::cout << "CAUTION: Resetting Card [" << flasher.sGetDBDF() <<
         "] back to factory mode." << std::endl;
-    if(!canProceed())
+    if(force || !canProceed())
         return -ECANCELED;
 
     return flasher.upgradeFirmware("", nullptr, nullptr);
+}
+
+/* We do not take the risk to flash any bmc marked as UNKNOWN */
+static void isSameShellOrSC(DSAInfo& candidate, DSAInfo& current,
+	bool *same_dsa, bool *same_bmc)
+{
+    if (!current.name.empty()) {
+        *same_dsa = (candidate.name == current.name &&
+            candidate.matchId(current));
+        *same_bmc = (current.bmcVer.empty() ||
+            current.bmcVer.compare(DSAInfo::UNKNOWN) == 0 ||
+            current.bmcVer.compare(DSAInfo::INACTIVE) == 0 ||
+            candidate.bmcVer == current.bmcVer);
+    }
 }
 
 static int updateShellAndSC(unsigned boardIdx, DSAInfo& candidate, bool& reboot)
@@ -210,12 +275,8 @@ static int updateShellAndSC(unsigned boardIdx, DSAInfo& candidate, bool& reboot)
     bool same_dsa = false;
     bool same_bmc = false;
     DSAInfo current = flasher.getOnBoardDSA();
-    if (!current.name.empty()) {
-        same_dsa = (candidate.name == current.name &&
-            candidate.matchId(current));
-        same_bmc = (current.bmcVer.empty() ||
-            candidate.bmcVer == current.bmcVer);
-    }
+    isSameShellOrSC(candidate, current, &same_dsa, &same_bmc);
+
     if (same_dsa && same_bmc)
         std::cout << "update not needed" << std::endl;
 
@@ -296,19 +357,23 @@ static DSAInfo selectShell(unsigned idx, std::string& dsa, std::string& id)
     bool same_dsa = false;
     bool same_bmc = false;
     DSAInfo currentDSA = flasher.getOnBoardDSA();
-    if (!currentDSA.name.empty()) {
-        same_dsa = (candidate.name == currentDSA.name &&
-            candidate.matchId(currentDSA));
-        same_bmc = (currentDSA.bmcVer.empty() ||
-            candidate.bmcVer == currentDSA.bmcVer);
-    }
+    isSameShellOrSC(candidate, currentDSA, &same_dsa, &same_bmc);
+ 
     if (same_dsa && same_bmc) {
         std::cout << "\t Status: shell is up-to-date" << std::endl;
         return DSAInfo("");
     }
-    std::cout << "\t Status: shell needs updating" << std::endl;
-    std::cout << "\t Current shell: " << currentDSA.name << std::endl;
-    std::cout << "\t Shell to be flashed: " << candidate.name << std::endl;
+
+    if (!same_bmc) {
+        std::cout << "\t Status: SC needs updating" << std::endl;
+        std::cout << "\t Current SC: " << currentDSA.bmcVer<< std::endl;
+        std::cout << "\t SC to be flashed: " << candidate.bmcVer << std::endl;
+    }
+    if (!same_dsa) {
+        std::cout << "\t Status: shell needs updating" << std::endl;
+        std::cout << "\t Current shell: " << currentDSA.name << std::endl;
+        std::cout << "\t Shell to be flashed: " << candidate.name << std::endl;
+    }
     return candidate;
 }
 
@@ -490,7 +555,7 @@ int flashXbutilFlashHandler(int argc, char *argv[])
     }
 
     if (reset) {
-        int ret = resetShell(devIdx == UINT_MAX ? 0 : devIdx);
+        int ret = resetShell(devIdx == UINT_MAX ? 0 : devIdx, force);
         if (ret)
             return ret;
         std::cout << "Shell is reset successfully" << std::endl;
@@ -573,22 +638,22 @@ static int update(int argc, char *argv[])
             break;
 
         switch (opt) {
-        case '0':
-            index = bdf2index(optarg);
-            if (index == UINT_MAX)
-                return -ENOENT;
-            break;
-        case '1':
-            shell = std::string(optarg);
-            break;
-        case '2':
-	    id = std::string(optarg);
-            break;
-        case '3':
-            force = true;
-            break;
-        default:
-            return -EINVAL;
+            case '0':
+                index = bdf2index(optarg);
+                if (index == UINT_MAX)
+                    return -ENOENT;
+                break;
+            case '1':
+                shell = std::string(optarg);
+                break;
+            case '2':
+                id = std::string(optarg);
+                break;
+            case '3':
+                force = true;
+                break;
+            default:
+                return -EINVAL;
         }
     }
 
@@ -635,7 +700,7 @@ static int shell(int argc, char *argv[])
     if (file.empty() || index == UINT_MAX)
         return -EINVAL;
 
-    int ret = updateShell(index, type, file.c_str(), nullptr);
+    int ret = updateShell(index, type, file.c_str(), file.c_str());
     if (ret)
         return ret;
 
@@ -687,8 +752,10 @@ static int sc(int argc, char *argv[])
 static int reset(int argc, char *argv[])
 {
     unsigned index = UINT_MAX;
+    bool force = false;
     const option opts[] = {
         { "card", required_argument, nullptr, '0' },
+        { "force", no_argument, nullptr, '1' },
         { nullptr, 0, nullptr, 0 },
     };
 
@@ -703,12 +770,15 @@ static int reset(int argc, char *argv[])
             if (index == UINT_MAX)
                 return -ENOENT;
             break;
+        case '1':
+            force = true;
+            break;
         default:
             return -EINVAL;
         }
     }
 
-    int ret = resetShell(index == UINT_MAX ? 0 : index);
+    int ret = resetShell(index == UINT_MAX ? 0 : index, force);
     if (ret)
         return ret;
 

@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2019 Xilinx, Inc
+ * Copyright (C) 2019-2020 Xilinx, Inc
  *
  * This is a wrapper class that does the prep work required to program a flash
  * device. Flasher will create a specific flash object determined by the program
@@ -22,6 +22,7 @@
 #define FLASHER_H
 
 #include "xspi.h"
+#include "xospiversal.h"
 #include "xmc.h"
 #include "firmware_image.h"
 #include "xclfeatures.h"
@@ -74,6 +75,7 @@ public:
     DSAInfo getOnBoardDSA();
     std::vector<DSAInfo> getInstalledDSA();
     int getBoardInfo(BoardInfo& board);
+    // uint16_t get_dsainfo_canidate(const std::string dsa, const std::string& id);
 
 private:
     enum E_FlasherType {
@@ -81,15 +83,18 @@ private:
         SPI,
         BPI,
         QSPIPS,
+        OSPIVERSAL,
     };
     const char *E_FlasherTypeStrings[4] = { "UNKNOWN", "SPI", "BPI", "QSPI_PS" };
     const char *getFlasherTypeText( E_FlasherType val ) { return E_FlasherTypeStrings[ val ]; }
+    E_FlasherType typeStr_to_E_FlasherType(const std::string& typeStr); 
     std::shared_ptr<xrt_core::device> m_device;
 
     int getProgrammingTypeFromDeviceName(unsigned char name[], E_FlasherType &type );
 
     FeatureRomHeader mFRHeader;
     unsigned int mGoldenVer = UINT_MAX;
+    
 
     const std::vector<std::pair<std::string, E_FlasherType>> flashPairs = {
         std::make_pair( "7v3", BPI ),

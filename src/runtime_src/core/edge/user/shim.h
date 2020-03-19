@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2016-2019 Xilinx, Inc
+ * Copyright (C) 2016-2020 Xilinx, Inc
  * Author(s): Hem C. Neema
  *          : Min Ma
  * ZNYQ HAL Driver layered on top of ZYNQ kernel driver
@@ -20,34 +20,34 @@
 #ifndef _ZYNQ_SHIM_H_
 #define _ZYNQ_SHIM_H_
 
+#include "zynq_dev.h"
 #include "core/edge/include/xclhal2_mpsoc.h"
 #include "core/edge/include/zynq_ioctl.h"
-#include "zynq_dev.h"
+#include "core/common/system.h"
+#include "core/common/device.h"
+#include "core/common/bo_cache.h"
+#include "core/common/xrt_profiling.h"
+#include "core/include/xcl_app_debug.h"
 #include <cstdint>
 #include <fstream>
 #include <map>
 #include <vector>
 #include <mutex>
 #include <memory>
-#include "core/common/bo_cache.h"
-#include "core/common/xrt_profiling.h"
-#include "core/include/xcl_app_debug.h"
+
+#ifdef XRT_ENABLE_AIE
+#include "core/edge/user/aie/aie.h"
+#endif
 
 namespace ZYNQ {
 
-// Forward declaration
-class ZYNQShimProfiling ;
-
-class ZYNQShim {
+class shim {
 
   static const int BUFFER_ALIGNMENT = 0x80; // TODO: UKP
 public:
-  ~ZYNQShim();
-  ZYNQShim(unsigned index, const char *logfileName,
+  ~shim();
+  shim(unsigned index, const char *logfileName,
            xclVerbosityLevel verbosity);
-
-  // The entry of profiling functions
-  std::unique_ptr<ZYNQShimProfiling> profiling;
 
   int mapKernelControl(const std::vector<std::pair<uint64_t, size_t>>& offsets);
   void *getVirtAddressOfApture(xclAddressSpace space, const uint64_t phy_addr, uint64_t& offset);
@@ -58,8 +58,8 @@ public:
   size_t xclRead(xclAddressSpace space, uint64_t offset, void *hostBuf,
                  size_t size);
   // Restricted read/write on IP register space
-  int xclRegWrite(uint32_t cu_index, uint32_t offset, uint32_t data);
-  int xclRegRead(uint32_t cu_index, uint32_t offset, uint32_t *datap);
+  int xclRegWrite(uint32_t ipIndex, uint32_t offset, uint32_t data);
+  int xclRegRead(uint32_t ipIndex, uint32_t offset, uint32_t *datap);
 
   unsigned int xclAllocBO(size_t size, int unused, unsigned flags);
   unsigned int xclAllocUserPtrBO(void *userptr, size_t size, unsigned flags);
@@ -84,6 +84,8 @@ public:
   int xclSKCreate(unsigned int boHandle, uint32_t cu_idx);
   int xclSKReport(uint32_t cu_idx, xrt_scu_state state);
 
+  double xclGetDeviceClockFreqMHz();
+
   uint xclGetNumLiveProcesses();
 
   std::string xclGetSysfsPath(const std::string& entry);
@@ -103,9 +105,12 @@ public:
 
   int xclGetDeviceInfo2(xclDeviceInfo2 *info);
 
+  int xclOpenIPInterruptNotify(uint32_t ipIndex, unsigned int flags);
+  int xclCloseIPInterruptNotify(int fd);
+
   bool isGood() const;
-  static ZYNQShim *handleCheck(void *handle);
-  int xclCuName2Index(const char *name, uint32_t& index);
+  static shim *handleCheck(void *handle);
+  int xclIPName2Index(const char *name, uint32_t& index);
   static int xclLogMsg(xrtLogMsgLevel level, const char* tag,
 		       const char* format, va_list args);
   
@@ -122,6 +127,10 @@ public:
   int cmpMonVersions(unsigned int major1, unsigned int minor1, 
 		     unsigned int major2, unsigned int minor2);
 
+#ifdef XRT_ENABLE_AIE
+  zynqaie::Aie *getAieArray();
+  void setAieArray(zynqaie::Aie *aie);
+#endif
 
 private:
   const int mBoardNumber = -1;
@@ -132,6 +141,7 @@ private:
   std::map<uint64_t, uint32_t *> mKernelControl;
   std::unique_ptr<xrt_core::bo_cache> mCmdBOCache;
   zynq_device *mDev = nullptr;
+  std::shared_ptr<xrt_core::device> mCoreDevice;
   size_t mKernelClockFreq;
 
   /*
@@ -143,6 +153,10 @@ private:
   std::mutex mCuMapLock;
   int xclRegRW(bool rd, uint32_t cu_index, uint32_t offset, uint32_t *datap);
   int xclLog(xrtLogMsgLevel level, const char* tag, const char* format, ...);
+
+#ifdef XRT_ENABLE_AIE
+  zynqaie::Aie *aieArray;
+#endif
 };
 
 } // namespace ZYNQ

@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2018 Xilinx, Inc
+ * Copyright (C) 2018-2020 Xilinx, Inc
  * Author(s): Max Zhen
  *
  * Licensed under the Apache License, Version 2.0 (the "License"). You may
@@ -38,7 +38,7 @@ XMC_Flasher::XMC_Flasher(std::shared_ptr<pcidev::pci_device> dev)
     bool is_mfg = false;
     mDev->sysfs_get<bool>("", "mfg", err, is_mfg, false);
     if (!is_mfg) {
-        if (mDev->get_sysfs_path("xmc", "").empty())
+        if (!hasXMC())
             goto nosup;
 
         mDev->sysfs_get<unsigned>("xmc", "status", err, val, 0);
@@ -73,12 +73,13 @@ XMC_Flasher::XMC_Flasher(std::shared_ptr<pcidev::pci_device> dev)
 
     mPktBufOffset = readReg(XMC_REG_OFF_PKT_OFFSET);
 
+    mXmcDev = nullptr;
     if (std::getenv("FLASH_VIA_DRIVER")) {
-        mXmcDev = fdopen(mDev->open("xmc", O_RDWR), "r+");
+        int fd = mDev->open("xmc", O_RDWR);
+        if (fd >= 0)
+            mXmcDev = fdopen(fd, "r+");
         if (mXmcDev == nullptr)
             std::cout << "Failed to open XMC device on card" << std::endl;
-    } else {
-        mXmcDev = nullptr;
     }
 
 nosup:
@@ -104,6 +105,11 @@ int XMC_Flasher::xclUpgradeFirmware(std::istream& tiTxtStream) {
     bool errorFound = false;
     int retries = 5;
     int ret = 0;
+
+    if (!hasSC()) {
+        std::cout << "ERROR: SC is not present on platform" << std::endl;
+        return -EINVAL;
+    }
 
     if (!isXMCReady())
         return -EINVAL;
@@ -252,7 +258,7 @@ int XMC_Flasher::xclGetBoardInfo(std::map<char, std::vector<char>>& info)
 {
     int ret = 0;
 
-    if (!isXMCReady() || !isBMCReady())
+    if (!hasSC() || !isXMCReady() || !isBMCReady())
         return -EINVAL;
 
     mPkt = {0};
@@ -361,7 +367,7 @@ void describePkt(struct xmcPkt& pkt, bool send)
     int lenInUint32 = (sizeof (pkt.hdr) + pkt.hdr.payloadSize +
         sizeof (uint32_t) - 1) / sizeof (uint32_t);
 
-    xrt_core::ios_flags_restore format(std::cout);
+    auto format = xrt_core::utils::ios_restore(std::cout);
 
     if (send)
         std::cout << "Sending XMC packet: ";
@@ -491,7 +497,7 @@ bool XMC_Flasher::isXMCReady()
     bool xmcReady = (XMC_MODE() == XMC_READY);
 
     if (!xmcReady) {
-        xrt_core::ios_flags_restore format(std::cout);
+        auto format = xrt_core::utils::ios_restore(std::cout);
         if (!mDev->get_sysfs_path("xmc", "").empty()) {
             std::cout << "ERROR: XMC is not ready: 0x" << std::hex
                 << XMC_MODE() << std::endl;
@@ -505,11 +511,35 @@ bool XMC_Flasher::isBMCReady()
     bool bmcReady = (BMC_MODE() == 0x1);
 
     if (!bmcReady) {
-        xrt_core::ios_flags_restore format(std::cout);
+      auto format = xrt_core::utils::ios_restore(std::cout);
         std::cout << "ERROR: SC is not ready: 0x" << std::hex
-            << BMC_MODE() << std::endl;
+                << BMC_MODE() << std::endl;
     }
+
     return bmcReady;
+}
+
+bool XMC_Flasher::hasXMC()
+{
+        return !mDev->get_sysfs_path("xmc", "").empty();
+}
+
+bool XMC_Flasher::hasSC()
+{
+    unsigned int val;
+    std::string errmsg;
+
+    if (!hasXMC())
+	    return false;
+
+    mDev->sysfs_get<unsigned>("xmc", "sc_presence", errmsg, val, 0);
+    if (!errmsg.empty()) {
+        std::cout << "can't read sc_presence node from " << mDev->sysfs_name <<
+            " : " << errmsg << std::endl;
+        return false;
+    }
+
+    return (val != 0);
 }
 
 static void tiTxtStreamToBin(std::istream& tiTxtStream,

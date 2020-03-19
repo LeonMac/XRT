@@ -472,12 +472,71 @@ typedef struct {
  * 
  * custom plugin requirements:
  *  1. has a method called hal_level_xdp_cb_func
- *      that takes a enume type and a void pointer
- *      payload which can be casted to one of the
+ *      that takes a enum type and a void pointer
+ *      payload which can be cast to one of the
  *      structs listed below.
  *  2. config through initialization by setting the
  *      plugin path attribute to the dynamic library.
  */ 
+
+// Used in the HAL plugin to trace API calls
+enum HalCallbackType {
+  ALLOC_BO_START,
+  ALLOC_BO_END,
+  ALLOC_USERPTR_BO_START,
+  ALLOC_USERPTR_BO_END,
+  FREE_BO_START,
+  FREE_BO_END,
+  WRITE_BO_START,
+  WRITE_BO_END,
+  READ_BO_START,
+  READ_BO_END,
+  MAP_BO_START,
+  MAP_BO_END,
+  SYNC_BO_START,
+  SYNC_BO_END,
+  COPY_BO_START,
+  COPY_BO_END,
+  UNMGD_READ_START,
+  UNMGD_READ_END,
+  UNMGD_WRITE_START,
+  UNMGD_WRITE_END,
+  READ_START,
+  READ_END,
+  WRITE_START,
+  WRITE_END,
+  PROBE_START,
+  PROBE_END,
+  LOCK_DEVICE_START,
+  LOCK_DEVICE_END,
+  UNLOCK_DEVICE_START,
+  UNLOCK_DEVICE_END,
+  OPEN_START,
+  OPEN_END,
+  CLOSE_START,
+  CLOSE_END,
+  OPEN_CONTEXT_START,
+  OPEN_CONTEXT_END,
+  CLOSE_CONTEXT_START,
+  CLOSE_CONTEXT_END,
+  LOAD_XCLBIN_START,
+  LOAD_XCLBIN_END
+};
+
+/**
+   HAL API Profiling Interface plugin types
+   
+   The data structure for enabling the HAL API Profiling 
+   plugins that will be interpreted by both the shim and
+   xdp.
+
+   custom plugin requirements:
+    1. Has an exported method called hal_api_interface_cb_func
+       that takes an enum type and a void pointer payload
+       which can be cast to one of the structs below.
+    2. config through initialization by setting the 
+        plugin path attribute to the dynamic library
+ */
 
 struct HalPluginConfig {
   int state; /** < [unused] indicates if on or off */
@@ -490,32 +549,13 @@ struct HalPluginConfig {
    */
 };
 
-enum HalCallbackType {
+// Used in the HAL API Interface to access hardware counters in host code
+enum HalInterfaceCallbackType {
   START_DEVICE_PROFILING,
   CREATE_PROFILE_RESULTS,
   GET_PROFILE_RESULTS,
-  DESTROY_PROFILE_RESULTS,
-  ALLOC_BO_START,
-  ALLOC_BO_END,
-  FREE_BO_START,
-  FREE_BO_END,
-  WRITE_BO_START,
-  WRITE_BO_END,
-  READ_BO_START,
-  READ_BO_END,
-  MAP_BO_START,
-  MAP_BO_END,
-  SYNC_BO_START,
-  SYNC_BO_END,
-  UNMGD_READ_START,
-  UNMGD_READ_END,
-  UNMGD_WRITE_START,
-  UNMGD_WRITE_END,
-  READ_START,
-  READ_END,
-  WRITE_START,
-  WRITE_END
-};
+  DESTROY_PROFILE_RESULTS
+} ;
 
 #ifdef __cplusplus
 #include <cstdint>
@@ -531,7 +571,7 @@ enum HalCallbackType {
  * callbacks are likely to take different structs.
  */
 typedef struct CBPayload {
-  unsigned int idcode;
+  uint64_t idcode;
   void* deviceHandle;
 } CBPayload;
 
@@ -540,12 +580,38 @@ typedef struct CBPayload {
  * here for the users to include.
  */
 
+struct BOTransferCBPayload
+{
+  struct CBPayload basePayload ;
+  uint64_t bufferTransferId;
+  size_t   size;
+#if 0
+  uint32_t boHandle;
+  uint64_t dest;
+  size_t offset;
+#endif
+};
+
+struct SyncBOCBPayload
+{
+  struct CBPayload basePayload ;
+  uint64_t bufferTransferId;
+  size_t   size;
+  bool     isWriteToDevice;
+#if 0
+  uint32_t boHandle;
+  size_t offset;
+#endif
+};
+
 struct ReadWriteCBPayload
 {
-  struct CBPayload basePayload;  
-  uint32_t  addressSpace;
-  uint64_t  offset;
-  size_t    size;
+  struct CBPayload basePayload;
+  size_t   size;
+#if 0
+  uint32_t addressSpace;
+  uint64_t offset;
+#endif
 };
 
 struct UnmgdPreadPwriteCBPayload
@@ -554,6 +620,12 @@ struct UnmgdPreadPwriteCBPayload
   unsigned int flags;
   size_t   count;
   uint64_t offset;
+};
+
+struct XclbinCBPayload
+{
+  struct CBPayload basePayload ;
+  const void* binary ;
 };
 
 struct ProfileResultsCBPayload
